@@ -1,0 +1,112 @@
+/* Cartera 360 — "Ledger" theme
+   Amber = cuentas por cobrar (activo). Deep blue = cuentas por pagar (pasivo).
+   Numbers are always set in IBM Plex Mono with tabular figures, like a printed ledger. */
+
+:root {
+  --ink-bg: #f7f4ec;
+  --ink-surface: #fcfcfb;
+  --ink-surface-raised: #ffffff;
+  --ink-border: #e7e1d3;
+  --ink-text: #1c1a15;
+  --ink-text-secondary: #52514e;
+  --ink-text-muted: #898781;
+
+  --cobrar: #b3760a;
+  --cobrar-soft: #f4e3c2;
+  --pagar: #1c4f8f;
+  --pagar-soft: #dbe6f6;
+
+  --status-good: #0ca30c;
+  --status-warning: #b5790f;
+  --status-serious: #c1592f;
+  --status-critical: #b3261e;
+  --good-soft: #dcf3dc;
+  --critical-soft: #f6dcda;
+  --neutral-soft: #eeece3;
+
+  color-scheme: light;
+}
+
+.dark {
+  --ink-bg: #0d0d0d;
+  --ink-surface: #17140f;
+  --ink-surface-raised: #1d1a14;
+  --ink-border: rgba(255, 255, 255, 0.1);
+  --ink-text: #f7f4ec;
+  --ink-text-secondary: #c3c2b7;
+  --ink-text-muted: #8a887f;
+
+  --cobrar: #eda100;
+  --cobrar-soft: rgba(237, 161, 0, 0.14);
+  --pagar: #6ea8f5;
+  --pagar-soft: rgba(110, 168, 245, 0.14);
+
+  --status-good: #22c55e;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #f27272;
+  --good-soft: rgba(34, 197, 94, 0.14);
+  --critical-soft: rgba(242, 114, 114, 0.16);
+  --neutral-soft: rgba(255, 255, 255, 0.06);
+
+  color-scheme: dark;
+}
+
+html,
+body,
+#__nuxt {
+  background-color: var(--ink-bg);
+  color: var(--ink-text);
+}
+
+body {
+  font-family: 'Public Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  background-image:
+    radial-gradient(circle at 100% 0%, rgba(179, 118, 10, 0.06), transparent 45%),
+    radial-gradient(circle at 0% 100%, rgba(28, 79, 143, 0.06), transparent 45%);
+  background-attachment: fixed;
+}
+
+.font-display {
+  font-family: 'Fraunces', Georgia, serif;
+  font-optical-sizing: auto;
+}
+
+.font-figures {
+  font-family: 'IBM Plex Mono', 'Courier New', monospace;
+  font-feature-settings: 'tnum' 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-card {
+  position: relative;
+  background-image:
+    linear-gradient(to bottom, transparent 0, transparent 100%);
+}
+
+.ledger-rule {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--ink-border) 0,
+    var(--ink-border) 1px,
+    transparent 1px,
+    transparent 2.15rem
+  );
+}
+
+.texture-noise {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
+
+::selection {
+  background: var(--cobrar-soft);
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--ink-border);
+  border-radius: 4px;
+}
