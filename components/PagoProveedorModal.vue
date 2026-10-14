@@ -281,7 +281,7 @@ function guardar() {
                 type="number"
                 step="0.01"
                 min="0"
-                placeholder="Ej. 45.50"
+                placeholder="Ej. 44.50"
                 @input="onTasaInput"
               />
             </UFormGroup>
