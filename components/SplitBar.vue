@@ -17,14 +17,14 @@ const pctPagar = computed(() => (props.pagar / total.value) * 100)
       <div class="h-full transition-all" :style="{ width: `${pctCobrar}%`, background: 'var(--cobrar)' }" />
       <div class="h-full transition-all" :style="{ width: `${pctPagar}%`, background: 'var(--pagar)' }" />
     </div>
-    <div class="mt-4 flex items-center justify-between text-sm">
+    <div class="mt-4 flex flex-wrap items-center justify-between gap-2.5 text-xs sm:text-sm">
       <div class="flex items-center gap-2">
-        <span class="h-2 w-2 rounded-full" style="background: var(--cobrar)" />
+        <span class="h-2 w-2 rounded-full shrink-0" style="background: var(--cobrar)" />
         <span style="color: var(--ink-text-secondary)">Por cobrar</span>
         <span class="font-figures font-semibold" style="color: var(--ink-text)">{{ formatDivisas(cobrar) }}</span>
       </div>
       <div class="flex items-center gap-2">
-        <span class="h-2 w-2 rounded-full" style="background: var(--pagar)" />
+        <span class="h-2 w-2 rounded-full shrink-0" style="background: var(--pagar)" />
         <span style="color: var(--ink-text-secondary)">Por pagar</span>
         <span class="font-figures font-semibold" style="color: var(--ink-text)">{{ formatDivisas(pagar) }}</span>
       </div>

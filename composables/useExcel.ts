@@ -21,13 +21,29 @@ function toIsoDate(v: unknown): string | null {
   if (v === null || v === undefined) return null
   if (v instanceof Date) {
     if (Number.isNaN(v.getTime())) return null
-    return v.toISOString().slice(0, 10)
+    const y = v.getFullYear()
+    const m = String(v.getMonth() + 1).padStart(2, '0')
+    const d = String(v.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
   }
   if (typeof v === 'string') {
     const t = v.trim()
     if (!t || t === ' ') return null
+    const match = t.match(/^(\d{4})-(\d{2})-(\d{2})/)
+    if (match) return `${match[1]}-${match[2]}-${match[3]}`
+    const dmy = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/)
+    if (dmy) {
+      const day = dmy[1].padStart(2, '0')
+      const month = dmy[2].padStart(2, '0')
+      const year = dmy[3]
+      return `${year}-${month}-${day}`
+    }
     const d = new Date(t)
-    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10)
+    if (Number.isNaN(d.getTime())) return null
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
   }
   return null
 }
@@ -238,7 +254,7 @@ export function useExcel() {
       XLSX.utils.book_append_sheet(workbook, sheet, nombreHoja)
     })
 
-    const fecha = new Date().toISOString().slice(0, 10)
+    const fecha = getTodayDateString()
     const nombreArchivo = tipo === 'cliente' ? `cuentas-por-cobrar-${fecha}.xlsx` : `cuentas-por-pagar-${fecha}.xlsx`
     XLSX.writeFile(workbook, nombreArchivo)
   }

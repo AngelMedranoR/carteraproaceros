@@ -53,6 +53,10 @@ export const useAccountsStore = defineStore('accounts', {
       const cuenta: Cuenta = { id: newId(tipo === 'cliente' ? 'cli' : 'prov'), nombre, tipo, creditos: [], abonos: [] }
       this.cuentas.push(cuenta)
       this.persist()
+      try {
+        const sync = useSupabaseSync()
+        sync.sincronizarCuentaEnSegundoPlano(cuenta)
+      } catch {}
       return cuenta
     },
     obtenerOCrearCuenta(nombre: string, tipo: TipoCuenta) {
@@ -65,33 +69,85 @@ export const useAccountsStore = defineStore('accounts', {
     eliminarCuenta(cuentaId: string) {
       this.cuentas = this.cuentas.filter((c) => c.id !== cuentaId)
       this.persist()
+      try {
+        const sync = useSupabaseSync()
+        sync.eliminarCuentaEnSegundoPlano(cuentaId)
+      } catch {}
     },
     agregarCredito(cuentaId: string, credito: Omit<Credito, 'id'>) {
       const cuenta = this.cuentas.find((c) => c.id === cuentaId)
       if (!cuenta) return
-      cuenta.creditos.push({ ...credito, id: newId('cr') })
+      const nuevoCredito = { ...credito, id: newId('cr') }
+      cuenta.creditos.push(nuevoCredito)
       this.persist()
+      try {
+        const sync = useSupabaseSync()
+        sync.sincronizarCreditoEnSegundoPlano(cuentaId, nuevoCredito)
+      } catch {}
+    },
+    actualizarCredito(cuentaId: string, creditoId: string, datos: Partial<Omit<Credito, 'id'>>) {
+      const cuenta = this.cuentas.find((c) => c.id === cuentaId)
+      if (!cuenta) return
+      const idx = cuenta.creditos.findIndex((c) => c.id === creditoId)
+      if (idx !== -1) {
+        cuenta.creditos[idx] = { ...cuenta.creditos[idx], ...datos }
+        this.persist()
+        try {
+          const sync = useSupabaseSync()
+          sync.sincronizarCreditoEnSegundoPlano(cuentaId, cuenta.creditos[idx])
+        } catch {}
+      }
     },
     agregarAbono(cuentaId: string, abonoData: Omit<Abono, 'id'>) {
       const cuenta = this.cuentas.find((c) => c.id === cuentaId)
       if (!cuenta) return
-      cuenta.abonos.push({ ...abonoData, id: newId('ab') })
+      const nuevoAbono = { ...abonoData, id: newId('ab') }
+      cuenta.abonos.push(nuevoAbono)
       this.persist()
+      try {
+        const sync = useSupabaseSync()
+        sync.sincronizarAbonoEnSegundoPlano(cuentaId, nuevoAbono)
+      } catch {}
+    },
+    actualizarAbono(cuentaId: string, abonoId: string, datos: Partial<Omit<Abono, 'id'>>) {
+      const cuenta = this.cuentas.find((c) => c.id === cuentaId)
+      if (!cuenta) return
+      const idx = cuenta.abonos.findIndex((a) => a.id === abonoId)
+      if (idx !== -1) {
+        cuenta.abonos[idx] = { ...cuenta.abonos[idx], ...datos }
+        this.persist()
+        try {
+          const sync = useSupabaseSync()
+          sync.sincronizarAbonoEnSegundoPlano(cuentaId, cuenta.abonos[idx])
+        } catch {}
+      }
     },
     eliminarCredito(cuentaId: string, creditoId: string) {
       const cuenta = this.cuentas.find((c) => c.id === cuentaId)
       if (!cuenta) return
       cuenta.creditos = cuenta.creditos.filter((c) => c.id !== creditoId)
       this.persist()
+      try {
+        const sync = useSupabaseSync()
+        sync.eliminarCreditoRemoto(creditoId)
+      } catch {}
     },
     eliminarAbono(cuentaId: string, abonoId: string) {
       const cuenta = this.cuentas.find((c) => c.id === cuentaId)
       if (!cuenta) return
       cuenta.abonos = cuenta.abonos.filter((a) => a.id !== abonoId)
       this.persist()
+      try {
+        const sync = useSupabaseSync()
+        sync.eliminarAbonoRemoto(abonoId)
+      } catch {}
     },
     reemplazarCuentasDeTipo(tipo: TipoCuenta, cuentas: Cuenta[]) {
       this.cuentas = [...this.cuentas.filter((c) => c.tipo !== tipo), ...cuentas]
+      this.persist()
+    },
+    reemplazarTodasLasCuentas(cuentas: Cuenta[]) {
+      this.cuentas = cuentas
       this.persist()
     },
   },

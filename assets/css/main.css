@@ -52,19 +52,34 @@
   color-scheme: dark;
 }
 
-html,
-body,
-#__nuxt {
-  background-color: var(--ink-bg);
-  color: var(--ink-text);
+html {
+  overflow-x: hidden;
+  max-width: 100vw;
 }
 
 body {
+  overflow-x: hidden;
+  max-width: 100vw;
+  min-width: 0;
   font-family: 'Public Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   background-image:
     radial-gradient(circle at 100% 0%, rgba(179, 118, 10, 0.06), transparent 45%),
     radial-gradient(circle at 0% 100%, rgba(28, 79, 143, 0.06), transparent 45%);
   background-attachment: fixed;
+}
+
+#__nuxt {
+  overflow-x: hidden;
+  width: 100%;
+  max-width: 100%;
+  min-height: 100vh;
+}
+
+html,
+body,
+#__nuxt {
+  background-color: var(--ink-bg);
+  color: var(--ink-text);
 }
 
 .font-display {

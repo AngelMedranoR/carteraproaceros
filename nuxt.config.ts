@@ -4,6 +4,12 @@ export default defineNuxtConfig({
   ssr: false,
   modules: ['@nuxt/ui', '@pinia/nuxt'],
   css: ['~/assets/css/main.css'],
+  runtimeConfig: {
+    public: {
+      supabaseUrl: process.env.NUXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
+      supabaseAnonKey: process.env.NUXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '',
+    },
+  },
   app: {
     head: {
       title: 'Cartera 360 · Cuentas por Cobrar y Pagar',

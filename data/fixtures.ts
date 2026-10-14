@@ -6,12 +6,29 @@ function id(prefix: string) {
   return `${prefix}-${seq.toString(36)}`
 }
 
-function credito(fecha: string, numeroFactura: string, montoDivisas: number, montoBolivares: number | null = null) {
-  return { id: id('cr'), fecha, numeroFactura, montoDivisas, montoBolivares }
+function credito(
+  fecha: string,
+  numeroFactura: string,
+  montoDivisas: number,
+  montoBolivares: number | null = null,
+  tasaCambio: number | null = null,
+  fechaVencimiento: string | null = null,
+  diasCredito: number | null = null,
+  descripcion: string = ''
+) {
+  const tasa = tasaCambio ?? (montoBolivares && montoDivisas ? Number((montoBolivares / montoDivisas).toFixed(2)) : null)
+  return { id: id('cr'), fecha, numeroFactura, montoDivisas, montoBolivares, tasaCambio: tasa, fechaVencimiento, diasCredito, descripcion }
 }
 
-function abono(fecha: string, montoDivisas: number, comentario: string, montoBolivares: number | null = null) {
-  return { id: id('ab'), fecha, montoDivisas, comentario, montoBolivares }
+function abono(
+  fecha: string,
+  montoDivisas: number,
+  comentario: string,
+  montoBolivares: number | null = null,
+  tasaCambio: number | null = null
+) {
+  const tasa = tasaCambio ?? (montoBolivares && montoDivisas ? Number((montoBolivares / montoDivisas).toFixed(2)) : null)
+  return { id: id('ab'), fecha, montoDivisas, comentario, montoBolivares, tasaCambio: tasa }
 }
 
 export function crearDatosDemo(): Cuenta[] {

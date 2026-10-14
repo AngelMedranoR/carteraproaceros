@@ -5,7 +5,8 @@ const emit = defineEmits<{ 'update:modelValue': [boolean]; guardado: [] }>()
 const store = useAccountsStore()
 const toast = useToast()
 
-const hoy = new Date().toISOString().slice(0, 10)
+const { getTodayDateString } = useCurrency()
+const hoy = getTodayDateString()
 const form = reactive({
   fecha: hoy,
   numeroFactura: '',

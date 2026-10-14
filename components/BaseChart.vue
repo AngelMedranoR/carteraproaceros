@@ -21,7 +21,7 @@ watch(() => props.config, render, { deep: true })
 </script>
 
 <template>
-  <div :style="{ height: `${height || 260}px` }">
-    <canvas ref="canvasRef" />
+  <div class="relative w-full min-w-0 max-w-full overflow-hidden" :style="{ height: `${height || 260}px` }">
+    <canvas ref="canvasRef" class="w-full max-w-full" />
   </div>
 </template>

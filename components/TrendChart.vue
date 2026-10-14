@@ -83,13 +83,13 @@ const config = computed(() => ({
 <template>
   <div>
     <BaseChart :config="config as any" :height="height" />
-    <div class="mt-3 flex items-center gap-5 text-xs" style="color: var(--ink-text-secondary)">
+    <div class="mt-3 flex flex-wrap items-center gap-3 sm:gap-5 text-xs" style="color: var(--ink-text-secondary)">
       <span class="flex items-center gap-1.5">
-        <span class="h-2 w-2 rounded-full" :style="{ background: colorA }" />
+        <span class="h-2 w-2 rounded-full shrink-0" :style="{ background: colorA }" />
         {{ labelA }}
       </span>
       <span class="flex items-center gap-1.5">
-        <span class="h-2 w-2 rounded-full" :style="{ background: colorB }" />
+        <span class="h-2 w-2 rounded-full shrink-0" :style="{ background: colorB }" />
         {{ labelB }}
       </span>
     </div>

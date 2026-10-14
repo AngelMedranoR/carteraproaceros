@@ -57,7 +57,54 @@ onMounted(() => {
         </NuxtLink>
       </nav>
 
-      <div class="px-3 pb-6">
+      <div class="px-3 pb-6 space-y-2">
+        <NuxtLink
+          to="/ajustes"
+          class="flex items-center justify-between rounded-sm px-3 py-2 text-xs border transition-colors hover:border-[var(--ink-border-focus)]"
+          :style="
+            settingsStore.connected && settingsStore.tablesReady
+              ? 'background: color-mix(in srgb, var(--status-good) 8%, transparent); border-color: color-mix(in srgb, var(--status-good) 30%, transparent); color: var(--ink-text)'
+              : 'background: var(--ink-surface-sunken); border-color: var(--ink-border); color: var(--ink-text-secondary)'
+          "
+        >
+          <div class="flex items-center gap-2">
+            <UIcon
+              :name="
+                settingsStore.syncStatus === 'syncing'
+                  ? 'i-heroicons-arrow-path'
+                  : settingsStore.connected
+                  ? 'i-heroicons-cloud'
+                  : 'i-heroicons-circle-stack'
+              "
+              class="h-4 w-4"
+              :class="{ 'animate-spin': settingsStore.syncStatus === 'syncing' }"
+              :style="{ color: settingsStore.connected && settingsStore.tablesReady ? 'var(--status-good)' : 'var(--ink-text-muted)' }"
+            />
+            <span class="truncate">
+              {{
+                settingsStore.syncStatus === 'syncing'
+                  ? 'Sincronizando...'
+                  : settingsStore.connected && settingsStore.tablesReady
+                  ? 'Nube activa'
+                  : settingsStore.connected
+                  ? 'Faltan tablas'
+                  : 'Modo local'
+              }}
+            </span>
+          </div>
+          <span
+            class="h-2 w-2 rounded-full shrink-0"
+            :style="{
+              background:
+                settingsStore.connected && settingsStore.tablesReady
+                  ? 'var(--status-good)'
+                  : settingsStore.connected
+                  ? 'var(--status-warning)'
+                  : 'var(--ink-text-muted)',
+            }"
+          />
+        </NuxtLink>
+
         <button
           class="flex w-full items-center gap-3 rounded-sm px-3 py-2.5 text-sm font-medium"
           style="color: var(--ink-text-secondary)"
@@ -69,22 +116,42 @@ onMounted(() => {
       </div>
     </aside>
 
-    <div class="flex-1 min-w-0 pb-20 lg:pb-0">
+    <div class="flex-1 min-w-0 max-w-full pb-24 lg:pb-0">
       <!-- Mobile top bar -->
       <header
-        class="lg:hidden flex items-center justify-between px-4 py-4 border-b sticky top-0 z-30 backdrop-blur"
+        class="lg:hidden flex items-center justify-between px-4 py-3.5 border-b sticky top-0 z-30 backdrop-blur"
         style="border-color: var(--ink-border); background: var(--ink-bg)"
       >
         <NuxtLink to="/" class="flex items-baseline gap-1.5">
           <span class="font-display text-lg" style="color: var(--ink-text)">Cartera</span>
           <span class="font-display text-lg italic" style="color: var(--cobrar)">360</span>
         </NuxtLink>
-        <button aria-label="Cambiar tema" style="color: var(--ink-text-secondary)" @click="toggleColorMode">
-          <UIcon :name="colorMode.value === 'dark' ? 'i-heroicons-sun' : 'i-heroicons-moon'" class="h-5 w-5" />
-        </button>
+        <div class="flex items-center gap-2">
+          <NuxtLink
+            to="/ajustes"
+            class="flex items-center gap-1.5 px-2 py-1 rounded text-xs border"
+            :style="
+              settingsStore.connected && settingsStore.tablesReady
+                ? 'background: color-mix(in srgb, var(--status-good) 10%, transparent); border-color: var(--status-good); color: var(--status-good)'
+                : 'background: var(--ink-surface-sunken); border-color: var(--ink-border); color: var(--ink-text-muted)'
+            "
+          >
+            <UIcon
+              :name="settingsStore.syncStatus === 'syncing' ? 'i-heroicons-arrow-path' : 'i-heroicons-cloud'"
+              class="h-3.5 w-3.5"
+              :class="{ 'animate-spin': settingsStore.syncStatus === 'syncing' }"
+            />
+            <span class="hidden sm:inline">
+              {{ settingsStore.connected && settingsStore.tablesReady ? 'Nube' : 'Local' }}
+            </span>
+          </NuxtLink>
+          <button aria-label="Cambiar tema" style="color: var(--ink-text-secondary)" @click="toggleColorMode">
+            <UIcon :name="colorMode.value === 'dark' ? 'i-heroicons-sun' : 'i-heroicons-moon'" class="h-5 w-5" />
+          </button>
+        </div>
       </header>
 
-      <main class="px-4 sm:px-6 lg:px-10 py-6 lg:py-8 max-w-[1400px]">
+      <main class="px-3.5 sm:px-6 lg:px-10 py-5 sm:py-6 lg:py-8 max-w-[1400px] w-full min-w-0">
         <slot />
       </main>
     </div>

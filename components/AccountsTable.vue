@@ -58,23 +58,23 @@ function confirmarEliminar(id: string, nombre: string) {
       <p style="color: var(--ink-text-secondary)">Sin resultados.</p>
     </div>
 
-    <ul v-else class="ledger-rule -mt-1">
+    <ul v-else class="ledger-rule -mt-1 w-full min-w-0">
       <li v-for="fila in filas" :key="fila.cuenta.id" class="py-3.5 first:pt-0">
         <NuxtLink
           :to="`${rutaBase}/${fila.cuenta.id}`"
-          class="grid grid-cols-2 sm:grid-cols-[1fr_auto_auto_1.5rem] items-center gap-x-4 gap-y-2 group"
+          class="grid grid-cols-2 sm:grid-cols-[1fr_auto_auto_1.5rem] items-center gap-x-3 sm:gap-x-4 gap-y-1.5 sm:gap-y-2 group w-full min-w-0"
         >
           <div class="min-w-0 col-span-2 sm:col-span-1">
             <p class="font-medium truncate group-hover:underline" style="color: var(--ink-text)">
               {{ fila.cuenta.nombre }}
             </p>
-            <p class="text-xs mt-0.5" style="color: var(--ink-text-muted)">
+            <p class="text-xs mt-0.5 truncate" style="color: var(--ink-text-muted)">
               {{ fila.cuenta.creditos.length }} créditos · {{ fila.cuenta.abonos.length }} abonos
             </p>
           </div>
-          <StatusBadge :estado="fila.estado" class="justify-self-start sm:justify-self-end" />
+          <StatusBadge :estado="fila.estado" class="justify-self-start sm:justify-self-end shrink-0" />
           <p
-            class="font-figures font-semibold text-right sm:text-left justify-self-end sm:justify-self-auto"
+            class="font-figures font-semibold text-right sm:text-left justify-self-end sm:justify-self-auto truncate"
             :style="{ color: tipo === 'cliente' ? 'var(--cobrar)' : 'var(--pagar)' }"
           >
             {{ formatDivisas(fila.saldo) }}
@@ -84,7 +84,7 @@ function confirmarEliminar(id: string, nombre: string) {
             color="gray"
             variant="ghost"
             size="2xs"
-            class="hidden sm:inline-flex"
+            class="hidden sm:inline-flex shrink-0"
             @click.prevent.stop="confirmarEliminar(fila.cuenta.id, fila.cuenta.nombre)"
           />
         </NuxtLink>
