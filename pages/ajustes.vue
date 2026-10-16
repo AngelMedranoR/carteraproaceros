@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import QRCode from 'qrcode'
+
 const settings = useSettingsStore()
 const accounts = useAccountsStore()
 const sync = useSupabaseSync()
@@ -16,7 +18,62 @@ const descargando = ref(false)
 const modalSql = ref(false)
 const modalVaciar = ref(false)
 const modalDescargar = ref(false)
+const modalVincular = ref(false)
+const qrDataUrl = ref('')
+const enlaceCopiado = ref(false)
 const sqlCopiado = ref(false)
+
+const enlaceMovil = computed(() => {
+  if (typeof window === 'undefined') return ''
+  const origin = window.location.origin
+  const u = encodeURIComponent(settings.url)
+  const k = encodeURIComponent(settings.anonKey)
+  return `${origin}/?s_url=${u}&s_key=${k}`
+})
+
+async function abrirModalVincular() {
+  if (!settings.url || !settings.anonKey) {
+    toast.add({
+      title: 'Configura Supabase primero',
+      description: 'Ingresa la URL y Anon Key para poder vincular tu teléfono.',
+      color: 'amber',
+      icon: 'i-heroicons-exclamation-triangle',
+    })
+    return
+  }
+  try {
+    qrDataUrl.value = await QRCode.toDataURL(enlaceMovil.value, {
+      width: 280,
+      margin: 2,
+      color: { dark: '#111827', light: '#ffffff' },
+    })
+  } catch (e) {
+    console.warn('Error al generar QR:', e)
+  }
+  modalVincular.value = true
+}
+
+async function copiarEnlaceMovil() {
+  try {
+    await navigator.clipboard.writeText(enlaceMovil.value)
+    enlaceCopiado.value = true
+    toast.add({
+      title: 'Enlace de vinculación copiado',
+      description: 'Pégalo o envíatelo por WhatsApp a tu teléfono para conectarlo automáticamente.',
+      color: 'green',
+      icon: 'i-heroicons-clipboard-document-check',
+    })
+    setTimeout(() => {
+      enlaceCopiado.value = false
+    }, 2500)
+  } catch {
+    toast.add({
+      title: 'No se pudo copiar automáticamente',
+      description: 'Por favor copia el enlace manualmente.',
+      color: 'yellow',
+    })
+  }
+}
 
 async function probar() {
   probando.value = true
@@ -379,6 +436,16 @@ function guardarAlertas() {
           </UButton>
 
           <UButton
+            v-if="settings.url && settings.anonKey"
+            color="sky"
+            variant="soft"
+            icon="i-heroicons-device-phone-mobile"
+            @click="abrirModalVincular"
+          >
+            Vincular teléfono (QR)
+          </UButton>
+
+          <UButton
             v-if="settings.connected"
             color="gray"
             variant="ghost"
@@ -572,6 +639,66 @@ function guardarAlertas() {
           <div class="flex justify-end gap-2">
             <UButton color="gray" variant="ghost" @click="modalVaciar = false">Cancelar</UButton>
             <UButton color="red" @click="vaciar">Vaciar todo</UButton>
+          </div>
+        </template>
+      </UCard>
+    </UModal>
+
+    <!-- Modal: Vincular Teléfono Móvil con Código QR -->
+    <UModal v-model="modalVincular" :ui="{ width: 'sm:max-w-md' }">
+      <UCard>
+        <template #header>
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <div class="flex h-7 w-7 items-center justify-center rounded bg-sky-500/10">
+                <UIcon name="i-heroicons-device-phone-mobile" class="h-4 w-4 text-sky-600 dark:text-sky-400" />
+              </div>
+              <div>
+                <h3 class="font-display text-base font-semibold" style="color: var(--ink-text)">Vincular Teléfono Móvil</h3>
+                <p class="text-[11px]" style="color: var(--ink-text-muted)">Conexión instantánea sin escribir claves</p>
+              </div>
+            </div>
+            <UButton color="gray" variant="ghost" icon="i-heroicons-x-mark" size="xs" @click="modalVincular = false" />
+          </div>
+        </template>
+
+        <div class="space-y-4 text-center">
+          <p class="text-xs text-left" style="color: var(--ink-text-secondary)">
+            Escanea este código con la cámara de tu teléfono para acceder a la misma base de datos en tiempo real:
+          </p>
+
+          <div v-if="qrDataUrl" class="inline-block p-3 rounded-lg bg-white shadow-sm border border-gray-200">
+            <img :src="qrDataUrl" alt="Código QR de Vinculación Móvil" class="w-56 h-56 mx-auto block" />
+          </div>
+
+          <div class="text-left bg-[var(--ink-surface-sunken)] p-3 rounded text-xs space-y-1.5 border border-[var(--ink-border)]">
+            <p class="font-medium flex items-center gap-1.5" style="color: var(--ink-text)">
+              <UIcon name="i-heroicons-sparkles" class="h-3.5 w-3.5 text-amber-500" /> Pasos sencillos:
+            </p>
+            <ol class="list-decimal list-inside space-y-1" style="color: var(--ink-text-muted)">
+              <li>Abre la app de <strong>Cámara</strong> en tu teléfono.</li>
+              <li>Apunta hacia el código QR de arriba.</li>
+              <li>Toca el enlace emergente para abrir Cartera 360.</li>
+              <li>¡Listo! Tu teléfono quedará conectado y sincronizado en vivo.</li>
+            </ol>
+          </div>
+
+          <div class="pt-1">
+            <UButton
+              block
+              color="gray"
+              variant="outline"
+              icon="i-heroicons-clipboard-document"
+              @click="copiarEnlaceMovil"
+            >
+              {{ enlaceCopiado ? '¡Enlace copiado al portapapeles!' : 'Copiar enlace directo para WhatsApp' }}
+            </UButton>
+          </div>
+        </div>
+
+        <template #footer>
+          <div class="flex justify-end">
+            <UButton color="gray" variant="ghost" size="sm" @click="modalVincular = false">Cerrar</UButton>
           </div>
         </template>
       </UCard>

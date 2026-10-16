@@ -58,3 +58,34 @@ export interface AlertSettings {
   diasCreditoPorDefecto: number
 }
 
+export interface EstadisticasImportacion {
+  cuentasTotal: number
+  cuentasNuevas: number
+  cuentasExistentes: number
+  creditosTotal: number
+  creditosNuevos: number
+  creditosExistentesOmitidos: number
+  abonosTotal: number
+  abonosNuevos: number
+  abonosExistentesOmitidos: number
+}
+
+export interface ResumenCuentaImportacion {
+  nombre: string
+  esNueva: boolean
+  nuevasFacturas: number
+  facturasOmitidas: number
+  nuevosAbonos: number
+  abonosOmitidos: number
+}
+
+export interface ConsolidacionResultado {
+  cuentasConsolidadas: Cuenta[]
+  estadisticas: EstadisticasImportacion
+  hojasOmitidas: string[]
+  cuentasAfectadas: ResumenCuentaImportacion[]
+  cuentasNuevasParaSubir: Cuenta[]
+  creditosNuevosParaSubir: Array<{ cuentaId: string; credito: Credito }>
+  abonosNuevosParaSubir: Array<{ cuentaId: string; abono: Abono }>
+}
+

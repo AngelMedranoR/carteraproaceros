@@ -146,6 +146,10 @@ export const useAccountsStore = defineStore('accounts', {
       this.cuentas = [...this.cuentas.filter((c) => c.tipo !== tipo), ...cuentas]
       this.persist()
     },
+    aplicarImportacionConsolidada(cuentasConsolidadas: Cuenta[]) {
+      this.cuentas = cuentasConsolidadas
+      this.persist()
+    },
     reemplazarTodasLasCuentas(cuentas: Cuenta[]) {
       this.cuentas = cuentas
       this.persist()
@@ -179,7 +183,13 @@ export const useAccountsStore = defineStore('accounts', {
       if (eventType === 'INSERT' || eventType === 'UPDATE') {
         if (!newRow?.id || !newRow?.cuenta_id) return
         const cuenta = this.cuentas.find((c) => c.id === newRow.cuenta_id)
-        if (!cuenta) return
+        if (!cuenta) {
+          try {
+            const sync = useSupabaseSync()
+            sync.solicitarReconciliacionDebounced()
+          } catch {}
+          return
+        }
         const credito: Credito = {
           id: newRow.id,
           fecha: newRow.fecha,
@@ -224,7 +234,13 @@ export const useAccountsStore = defineStore('accounts', {
       if (eventType === 'INSERT' || eventType === 'UPDATE') {
         if (!newRow?.id || !newRow?.cuenta_id) return
         const cuenta = this.cuentas.find((c) => c.id === newRow.cuenta_id)
-        if (!cuenta) return
+        if (!cuenta) {
+          try {
+            const sync = useSupabaseSync()
+            sync.solicitarReconciliacionDebounced()
+          } catch {}
+          return
+        }
         const abono: Abono = {
           id: newRow.id,
           fecha: newRow.fecha,

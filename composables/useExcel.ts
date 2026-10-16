@@ -1,8 +1,220 @@
 import * as XLSX from 'xlsx'
-import type { Cuenta, Credito, Abono, TipoCuenta } from '~/types'
+import type {
+  Cuenta,
+  Credito,
+  Abono,
+  TipoCuenta,
+  ConsolidacionResultado,
+  ResumenCuentaImportacion,
+  EstadisticasImportacion,
+} from '~/types'
 
-function newId(prefix: string) {
+export function newId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 9)}`
+}
+
+export function normalizarNombre(nombre: string): string {
+  return (nombre || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+}
+
+export function esCreditoDuplicado(nuevo: Credito, existentes: Credito[]): Credito | undefined {
+  const numNuevo = (nuevo.numeroFactura || '').trim().toLowerCase()
+  if (numNuevo) {
+    const match = existentes.find((c) => (c.numeroFactura || '').trim().toLowerCase() === numNuevo)
+    if (match) return match
+  }
+  return existentes.find((c) => {
+    const numExistente = (c.numeroFactura || '').trim().toLowerCase()
+    const mismaFecha = c.fecha === nuevo.fecha
+    const mismoMonto = Math.abs((c.montoDivisas || 0) - (nuevo.montoDivisas || 0)) < 0.001
+    if (mismaFecha && mismoMonto) {
+      if (!numNuevo && !numExistente) return true
+      if (numNuevo && numExistente && numNuevo === numExistente) return true
+    }
+    return false
+  })
+}
+
+export function esAbonoDuplicado(nuevo: Abono, existentes: Abono[]): Abono | undefined {
+  const comentarioNuevo = (nuevo.comentario || '').trim().toLowerCase()
+  return existentes.find((a) => {
+    const mismaFecha = a.fecha === nuevo.fecha
+    const mismoMonto = Math.abs((a.montoDivisas || 0) - (nuevo.montoDivisas || 0)) < 0.001
+    if (!mismaFecha || !mismoMonto) return false
+    const comentarioExistente = (a.comentario || '').trim().toLowerCase()
+    if (comentarioNuevo && comentarioExistente) {
+      return comentarioNuevo === comentarioExistente
+    }
+    return true
+  })
+}
+
+export function consolidarImportacion(
+  cuentasLeidas: Cuenta[],
+  cuentasActuales: Cuenta[],
+  tipo: TipoCuenta,
+  hojasOmitidas: string[] = []
+): ConsolidacionResultado {
+  // Cuentas del otro tipo permanecen intactas
+  const cuentasOtroTipo = cuentasActuales.filter((c) => c.tipo !== tipo)
+  // Clonar cuentas del tipo actual para trabajar sobre ellas
+  const cuentasTipoActual: Cuenta[] = cuentasActuales
+    .filter((c) => c.tipo === tipo)
+    .map((c) => ({
+      ...c,
+      creditos: [...c.creditos.map((cr) => ({ ...cr }))],
+      abonos: [...c.abonos.map((ab) => ({ ...ab }))],
+    }))
+
+  const estadisticas: EstadisticasImportacion = {
+    cuentasTotal: cuentasLeidas.length,
+    cuentasNuevas: 0,
+    cuentasExistentes: 0,
+    creditosTotal: 0,
+    creditosNuevos: 0,
+    creditosExistentesOmitidos: 0,
+    abonosTotal: 0,
+    abonosNuevos: 0,
+    abonosExistentesOmitidos: 0,
+  }
+
+  const cuentasAfectadas: ResumenCuentaImportacion[] = []
+  const cuentasNuevasParaSubir: Cuenta[] = []
+  const creditosNuevosParaSubir: Array<{ cuentaId: string; credito: Credito }> = []
+  const abonosNuevosParaSubir: Array<{ cuentaId: string; abono: Abono }> = []
+
+  for (const leida of cuentasLeidas) {
+    const nombreNorm = normalizarNombre(leida.nombre)
+    estadisticas.creditosTotal += leida.creditos.length
+    estadisticas.abonosTotal += leida.abonos.length
+
+    const existente = cuentasTipoActual.find(
+      (c) => normalizarNombre(c.nombre) === nombreNorm
+    )
+
+    if (existente) {
+      estadisticas.cuentasExistentes++
+      let nuevasFacturas = 0
+      let facturasOmitidas = 0
+      let nuevosAbonos = 0
+      let abonosOmitidos = 0
+
+      // Fusionar créditos
+      for (const cr of leida.creditos) {
+        const dup = esCreditoDuplicado(cr, existente.creditos)
+        if (dup) {
+          facturasOmitidas++
+          estadisticas.creditosExistentesOmitidos++
+          // Si el registro entrante tiene datos complementarios, enriquecer el existente
+          if (dup.montoBolivares === null && cr.montoBolivares !== null) {
+            dup.montoBolivares = cr.montoBolivares
+          }
+          if (!dup.fechaVencimiento && cr.fechaVencimiento) {
+            dup.fechaVencimiento = cr.fechaVencimiento
+          }
+          if (!dup.descripcion && cr.descripcion) {
+            dup.descripcion = cr.descripcion
+          }
+        } else {
+          nuevasFacturas++
+          estadisticas.creditosNuevos++
+          const nuevoCr: Credito = {
+            ...cr,
+            id: cr.id && !cr.id.startsWith('temp') ? cr.id : newId('cr'),
+          }
+          existente.creditos.push(nuevoCr)
+          creditosNuevosParaSubir.push({ cuentaId: existente.id, credito: nuevoCr })
+        }
+      }
+
+      // Fusionar abonos
+      for (const ab of leida.abonos) {
+        const dup = esAbonoDuplicado(ab, existente.abonos)
+        if (dup) {
+          abonosOmitidos++
+          estadisticas.abonosExistentesOmitidos++
+          if (dup.montoBolivares === null && ab.montoBolivares !== null) {
+            dup.montoBolivares = ab.montoBolivares
+          }
+          if (!dup.comentario && ab.comentario) {
+            dup.comentario = ab.comentario
+          }
+        } else {
+          nuevosAbonos++
+          estadisticas.abonosNuevos++
+          const nuevoAb: Abono = {
+            ...ab,
+            id: ab.id && !ab.id.startsWith('temp') ? ab.id : newId('ab'),
+          }
+          existente.abonos.push(nuevoAb)
+          abonosNuevosParaSubir.push({ cuentaId: existente.id, abono: nuevoAb })
+        }
+      }
+
+      cuentasAfectadas.push({
+        nombre: existente.nombre,
+        esNueva: false,
+        nuevasFacturas,
+        facturasOmitidas,
+        nuevosAbonos,
+        abonosOmitidos,
+      })
+    } else {
+      // Cuenta completamente nueva
+      estadisticas.cuentasNuevas++
+      estadisticas.creditosNuevos += leida.creditos.length
+      estadisticas.abonosNuevos += leida.abonos.length
+
+      const nuevaCuentaId = leida.id || newId(tipo === 'cliente' ? 'cli' : 'prov')
+      const nuevaCuenta: Cuenta = {
+        id: nuevaCuentaId,
+        nombre: leida.nombre.trim(),
+        tipo,
+        creditos: leida.creditos.map((cr) => ({
+          ...cr,
+          id: cr.id || newId('cr'),
+        })),
+        abonos: leida.abonos.map((ab) => ({
+          ...ab,
+          id: ab.id || newId('ab'),
+        })),
+      }
+
+      cuentasTipoActual.push(nuevaCuenta)
+      cuentasNuevasParaSubir.push(nuevaCuenta)
+
+      for (const cr of nuevaCuenta.creditos) {
+        creditosNuevosParaSubir.push({ cuentaId: nuevaCuenta.id, credito: cr })
+      }
+      for (const ab of nuevaCuenta.abonos) {
+        abonosNuevosParaSubir.push({ cuentaId: nuevaCuenta.id, abono: ab })
+      }
+
+      cuentasAfectadas.push({
+        nombre: nuevaCuenta.nombre,
+        esNueva: true,
+        nuevasFacturas: nuevaCuenta.creditos.length,
+        facturasOmitidas: 0,
+        nuevosAbonos: nuevaCuenta.abonos.length,
+        abonosOmitidos: 0,
+      })
+    }
+  }
+
+  const cuentasConsolidadas = [...cuentasOtroTipo, ...cuentasTipoActual]
+
+  return {
+    cuentasConsolidadas,
+    estadisticas,
+    hojasOmitidas,
+    cuentasAfectadas,
+    cuentasNuevasParaSubir,
+    creditosNuevosParaSubir,
+    abonosNuevosParaSubir,
+  }
 }
 
 function toNumber(v: unknown): number | null {
@@ -259,5 +471,12 @@ export function useExcel() {
     XLSX.writeFile(workbook, nombreArchivo)
   }
 
-  return { parseWorkbook, exportarCuentas }
+  return {
+    parseWorkbook,
+    exportarCuentas,
+    consolidarImportacion,
+    normalizarNombre,
+    esCreditoDuplicado,
+    esAbonoDuplicado,
+  }
 }

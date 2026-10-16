@@ -262,25 +262,39 @@ export function useSupabaseSync() {
         }
       }
 
-      // Upsert en orden relacional
+      // Upsert en orden relacional con procesamiento por lotes (chunks de 100)
+      const chunkSize = 100
+
       if (cuentasRows.length > 0) {
-        const { error: errCuentas } = await client.from('cuentas').upsert(cuentasRows, { onConflict: 'id' })
-        if (errCuentas) throw errCuentas
+        for (let i = 0; i < cuentasRows.length; i += chunkSize) {
+          const chunk = cuentasRows.slice(i, i + chunkSize)
+          const { error: errCuentas } = await client.from('cuentas').upsert(chunk, { onConflict: 'id' })
+          if (errCuentas) throw errCuentas
+        }
       }
 
       if (creditosRows.length > 0) {
-        const { error: errCreditos } = await client.from('creditos').upsert(creditosRows, { onConflict: 'id' })
-        if (errCreditos) throw errCreditos
+        for (let i = 0; i < creditosRows.length; i += chunkSize) {
+          const chunk = creditosRows.slice(i, i + chunkSize)
+          const { error: errCreditos } = await client.from('creditos').upsert(chunk, { onConflict: 'id' })
+          if (errCreditos) throw errCreditos
+        }
       }
 
       if (abonosRows.length > 0) {
-        const { error: errAbonos } = await client.from('abonos').upsert(abonosRows, { onConflict: 'id' })
-        if (errAbonos) throw errAbonos
+        for (let i = 0; i < abonosRows.length; i += chunkSize) {
+          const chunk = abonosRows.slice(i, i + chunkSize)
+          const { error: errAbonos } = await client.from('abonos').upsert(chunk, { onConflict: 'id' })
+          if (errAbonos) throw errAbonos
+        }
       }
 
       settings.setSyncStatus('success')
       settings.lastSyncAt = new Date().toISOString()
       settings.persist()
+
+      // Notificar a otros dispositivos (ej: teléfonos) por WebSocket
+      await emitirEventoBulkSync()
 
       return {
         ok: true,
@@ -294,6 +308,90 @@ export function useSupabaseSync() {
       const msg = err?.message || 'Error al subir los datos a Supabase.'
       settings.lastError = msg
       settings.persist()
+      return { ok: false, mensaje: msg, error: msg }
+    }
+  }
+
+  const sincronizarLote = async (datos: {
+    cuentas: Cuenta[]
+    creditos: Array<{ cuentaId: string; credito: Credito }>
+    abonos: Array<{ cuentaId: string; abono: Abono }>
+  }): Promise<SyncResult> => {
+    try {
+      const client = await getClient()
+      if (!client) throw new Error('Supabase no está configurado.')
+
+      const cuentasRows = datos.cuentas.map((c) => ({
+        id: c.id,
+        nombre: c.nombre,
+        tipo: c.tipo,
+        updated_at: new Date().toISOString(),
+      }))
+
+      const creditosRows = datos.creditos.map(({ cuentaId, credito: cr }) => ({
+        id: cr.id,
+        cuenta_id: cuentaId,
+        fecha: cr.fecha,
+        numero_factura: cr.numeroFactura || '',
+        monto_bolivares: cr.montoBolivares,
+        monto_divisas: cr.montoDivisas,
+        tasa_cambio: cr.tasaCambio ?? null,
+        fecha_vencimiento: cr.fechaVencimiento ?? null,
+        dias_credito: cr.diasCredito ?? null,
+        descripcion: cr.descripcion ?? '',
+      }))
+
+      const abonosRows = datos.abonos.map(({ cuentaId, abono: ab }) => ({
+        id: ab.id,
+        cuenta_id: cuentaId,
+        fecha: ab.fecha,
+        monto_bolivares: ab.montoBolivares,
+        monto_divisas: ab.montoDivisas,
+        tasa_cambio: ab.tasaCambio ?? null,
+        comentario: ab.comentario || '',
+      }))
+
+      const chunkSize = 100
+
+      if (cuentasRows.length > 0) {
+        for (let i = 0; i < cuentasRows.length; i += chunkSize) {
+          const chunk = cuentasRows.slice(i, i + chunkSize)
+          const { error } = await client.from('cuentas').upsert(chunk, { onConflict: 'id' })
+          if (error) throw error
+        }
+      }
+
+      if (creditosRows.length > 0) {
+        for (let i = 0; i < creditosRows.length; i += chunkSize) {
+          const chunk = creditosRows.slice(i, i + chunkSize)
+          const { error } = await client.from('creditos').upsert(chunk, { onConflict: 'id' })
+          if (error) throw error
+        }
+      }
+
+      if (abonosRows.length > 0) {
+        for (let i = 0; i < abonosRows.length; i += chunkSize) {
+          const chunk = abonosRows.slice(i, i + chunkSize)
+          const { error } = await client.from('abonos').upsert(chunk, { onConflict: 'id' })
+          if (error) throw error
+        }
+      }
+
+      settings.lastSyncAt = new Date().toISOString()
+      settings.persist()
+
+      // Notificar a otros dispositivos (teléfonos) para recarga en vivo
+      await emitirEventoBulkSync()
+
+      return {
+        ok: true,
+        mensaje: `Sincronizados en la nube: ${cuentasRows.length} cuentas, ${creditosRows.length} facturas y ${abonosRows.length} abonos.`,
+        cuentasCount: cuentasRows.length,
+        creditosCount: creditosRows.length,
+        abonosCount: abonosRows.length,
+      }
+    } catch (err: any) {
+      const msg = err?.message || 'Error al guardar el lote en Supabase.'
       return { ok: false, mensaje: msg, error: msg }
     }
   }
@@ -531,6 +629,14 @@ export function useSupabaseSync() {
             accountsStore.manejarEventoRealtimeAbonos(payload as any)
           }
         )
+        .on(
+          'broadcast',
+          { event: 'bulk-sync' },
+          () => {
+            // Notificación de que otro dispositivo (ej: la PC) importó un lote masivo
+            solicitarReconciliacionDebounced()
+          }
+        )
         .subscribe((status) => {
           if (status === 'SUBSCRIBED') {
             channelSubscribed = true
@@ -547,6 +653,47 @@ export function useSupabaseSync() {
       console.warn('Error al iniciar suscripción Realtime:', e)
       settings.setRealtimeActivo(false)
     }
+  }
+
+  const emitirEventoBulkSync = async () => {
+    if (!realtimeChannel || !channelSubscribed) return
+    try {
+      await realtimeChannel.send({
+        type: 'broadcast',
+        event: 'bulk-sync',
+        payload: { timestamp: new Date().toISOString() },
+      })
+    } catch (e) {
+      console.warn('Error al emitir broadcast bulk-sync:', e)
+    }
+  }
+
+  let reconciliacionTimer: any = null
+  const solicitarReconciliacionDebounced = () => {
+    if (reconciliacionTimer) clearTimeout(reconciliacionTimer)
+    reconciliacionTimer = setTimeout(async () => {
+      try {
+        await descargarDeSupabase()
+      } catch (e) {
+        console.warn('Reconciliación debounced error:', e)
+      }
+    }, 350)
+  }
+
+  const procesarCredencialesDesdeUrl = () => {
+    if (typeof window === 'undefined') return false
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const urlParam = params.get('s_url') || params.get('supabase_url')
+      const keyParam = params.get('s_key') || params.get('supabase_key')
+      if (urlParam && keyParam) {
+        settings.guardarConfiguracionSupabase(urlParam.trim(), keyParam.trim(), true)
+        const cleanUrl = window.location.pathname + window.location.hash
+        window.history.replaceState({}, document.title, cleanUrl)
+        return true
+      }
+    } catch {}
+    return false
   }
 
   const detenerSuscripcionRealtime = async () => {
@@ -566,6 +713,9 @@ export function useSupabaseSync() {
     if (initializing) return
     initializing = true
     try {
+      // 1. Detectar si el usuario abrió un enlace de vinculación en su teléfono
+      procesarCredencialesDesdeUrl()
+
       const { url, anonKey } = getEffectiveCredentials()
       if (!url || !anonKey) {
         settings.connected = false
@@ -597,11 +747,15 @@ export function useSupabaseSync() {
     getClient,
     probarConexion,
     subirASupabase,
+    sincronizarLote,
     descargarDeSupabase,
     sincronizar,
     iniciarSuscripcionRealtime,
     detenerSuscripcionRealtime,
     inicializarSincronizacion,
+    emitirEventoBulkSync,
+    solicitarReconciliacionDebounced,
+    procesarCredencialesDesdeUrl,
     sincronizarCuentaEnSegundoPlano,
     eliminarCuentaEnSegundoPlano,
     sincronizarCreditoEnSegundoPlano,

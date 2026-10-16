@@ -1,19 +1,25 @@
 <script setup lang="ts">
+import type { ConsolidacionResultado } from '~/types'
+
 const props = defineProps<{ tipo: 'cliente' | 'proveedor' }>()
 
 const store = useAccountsStore()
-const { parseWorkbook, exportarCuentas } = useExcel()
+const settingsStore = useSettingsStore()
+const sync = useSupabaseSync()
+const { parseWorkbook, exportarCuentas, consolidarImportacion } = useExcel()
 const toast = useToast()
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const cargando = ref(false)
-const pendiente = ref<{ cuentas: any[]; hojasOmitidas: string[] } | null>(null)
+const guardando = ref(false)
+const pendiente = ref<ConsolidacionResultado | null>(null)
 const nombreArchivo = ref('')
 
 const cuentasActuales = computed(() =>
   props.tipo === 'cliente' ? store.clientes : store.proveedores
 )
 const etiqueta = props.tipo === 'cliente' ? 'clientes' : 'proveedores'
+const etiquetaSingular = props.tipo === 'cliente' ? 'cliente' : 'proveedor'
 
 function abrirSelector() {
   fileInput.value?.click()
@@ -35,7 +41,14 @@ async function onFileChange(e: Event) {
         icon: 'i-heroicons-exclamation-triangle',
       })
     } else {
-      pendiente.value = resultado
+      // Consolidar de forma inteligente contra los datos actuales del store
+      const consolidado = consolidarImportacion(
+        resultado.cuentas,
+        store.cuentas,
+        props.tipo,
+        resultado.hojasOmitidas
+      )
+      pendiente.value = consolidado
     }
   } catch (err: any) {
     toast.add({
@@ -50,18 +63,57 @@ async function onFileChange(e: Event) {
   }
 }
 
-function confirmarImportacion() {
+async function confirmarImportacion() {
   if (!pendiente.value) return
-  store.reemplazarCuentasDeTipo(props.tipo, pendiente.value.cuentas)
-  toast.add({
-    title: `${pendiente.value.cuentas.length} ${etiqueta} importados`,
-    description: pendiente.value.hojasOmitidas.length
-      ? `Se omitieron ${pendiente.value.hojasOmitidas.length} hojas (ocultas o de resumen).`
-      : undefined,
-    icon: 'i-heroicons-check-circle',
-    color: 'green',
-  })
-  pendiente.value = null
+  guardando.value = true
+  const info = pendiente.value
+
+  try {
+    // 1. Guardar estado consolidado en Pinia y localStorage
+    store.aplicarImportacionConsolidada(info.cuentasConsolidadas)
+
+    // 2. Si Supabase está conectado, guardar directamente en la base de datos en la nube
+    let enNube = false
+    if (settingsStore.connected && settingsStore.tablesReady) {
+      // Tomamos todas las cuentas leídas (para asegurar que existen con sus IDs consolidados)
+      const cuentasParaUpsert = info.cuentasConsolidadas.filter((c) => c.tipo === props.tipo)
+      const resDb = await sync.sincronizarLote({
+        cuentas: cuentasParaUpsert,
+        creditos: info.creditosNuevosParaSubir,
+        abonos: info.abonosNuevosParaSubir,
+      })
+
+      if (resDb.ok) {
+        enNube = true
+      } else {
+        toast.add({
+          title: 'Guardado localmente, error en la nube',
+          description: resDb.mensaje,
+          color: 'yellow',
+          icon: 'i-heroicons-exclamation-triangle',
+        })
+      }
+    }
+
+    const { estadisticas } = info
+    toast.add({
+      title: enNube ? 'Sincronizado con la base de datos' : `${estadisticas.cuentasTotal} ${etiqueta} importados`,
+      description: `${estadisticas.cuentasTotal} ${etiqueta} procesados (${estadisticas.creditosNuevos} facturas agregadas, ${estadisticas.creditosExistentesOmitidos} ya existentes omitidas).${enNube ? ' Disponible en tiempo real en tu PC y teléfono.' : ''}`,
+      icon: enNube ? 'i-heroicons-cloud-arrow-up' : 'i-heroicons-check-circle',
+      color: 'green',
+    })
+
+    pendiente.value = null
+  } catch (err: any) {
+    toast.add({
+      title: 'Error durante la importación',
+      description: err?.message || 'Ocurrió un error inesperado al guardar los datos.',
+      color: 'red',
+      icon: 'i-heroicons-x-circle',
+    })
+  } finally {
+    guardando.value = false
+  }
 }
 
 function cancelarImportacion() {
@@ -82,10 +134,35 @@ function exportar() {
   <UCard>
     <div class="flex flex-col sm:flex-row sm:items-center gap-4">
       <div class="flex-1">
-        <p class="font-medium" style="color: var(--ink-text)">Importar / exportar Excel</p>
+        <div class="flex items-center gap-2">
+          <p class="font-medium" style="color: var(--ink-text)">Importar / exportar Excel</p>
+          <span
+            v-if="settingsStore.realtimeActivo"
+            class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium"
+            style="background: color-mix(in srgb, var(--status-good) 15%, transparent); color: var(--status-good)"
+          >
+            <UIcon name="i-heroicons-bolt" class="h-3 w-3" />
+            Base de datos en tiempo real
+          </span>
+          <span
+            v-else-if="settingsStore.connected && settingsStore.tablesReady"
+            class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium"
+            style="background: color-mix(in srgb, var(--status-good) 10%, transparent); color: var(--status-good)"
+          >
+            <UIcon name="i-heroicons-cloud" class="h-3 w-3" />
+            Sincronización en la nube
+          </span>
+          <span
+            v-else
+            class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium"
+            style="background: var(--ink-surface-sunken); color: var(--ink-text-muted)"
+          >
+            <UIcon name="i-heroicons-circle-stack" class="h-3 w-3" />
+            Modo local
+          </span>
+        </div>
         <p class="text-sm mt-0.5" style="color: var(--ink-text-secondary)">
-          Sube tu archivo .xlsx con una hoja por {{ props.tipo === 'cliente' ? 'cliente' : 'proveedor' }}
-          (columnas CRÉDITOS / ABONOS). Las hojas ocultas y de resumen se ignoran automáticamente.
+          Sube tu planilla .xlsx de {{ etiqueta }}. El sistema detecta y evita duplicar registros existentes, guardándolos automáticamente en la base de datos global.
         </p>
       </div>
       <div class="flex gap-2 shrink-0">
@@ -105,22 +182,155 @@ function exportar() {
       <input ref="fileInput" type="file" accept=".xlsx,.xls" class="hidden" @change="onFileChange" />
     </div>
 
-    <div v-if="pendiente" class="mt-4 rounded-sm border p-4" style="border-color: var(--ink-border); background: var(--neutral-soft)">
-      <p class="text-sm font-medium" style="color: var(--ink-text)">
-        Se leyeron {{ pendiente.cuentas.length }} {{ etiqueta }} de "{{ nombreArchivo }}".
-      </p>
-      <p v-if="cuentasActuales.length" class="text-sm mt-1" style="color: var(--ink-text-secondary)">
-        Esto reemplazará los {{ cuentasActuales.length }} {{ etiqueta }} que tienes actualmente cargados.
-      </p>
-      <details v-if="pendiente.hojasOmitidas.length" class="mt-2 text-xs" style="color: var(--ink-text-muted)">
-        <summary class="cursor-pointer">{{ pendiente.hojasOmitidas.length }} hojas omitidas</summary>
+    <!-- Vista previa con Desduplicación Inteligente -->
+    <div
+      v-if="pendiente"
+      class="mt-4 rounded-sm border p-4 space-y-3"
+      style="border-color: var(--ink-border); background: var(--neutral-soft)"
+    >
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <UIcon name="i-heroicons-document-check" class="h-5 w-5" style="color: var(--cobrar)" />
+          <p class="text-sm font-semibold" style="color: var(--ink-text)">
+            Análisis de "{{ nombreArchivo }}" completado
+          </p>
+        </div>
+        <UBadge
+          :color="settingsStore.connected && settingsStore.tablesReady ? 'green' : 'amber'"
+          variant="soft"
+          size="xs"
+        >
+          {{
+            settingsStore.connected && settingsStore.tablesReady
+              ? 'Listo para subir a Supabase'
+              : 'Se guardará en este navegador'
+          }}
+        </UBadge>
+      </div>
+
+      <!-- Resumen de estadísticas de desduplicación -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+        <!-- Cuentas -->
+        <div class="rounded p-2.5 border border-[var(--ink-border)] bg-[var(--ink-surface)]">
+          <p class="text-xs uppercase font-medium" style="color: var(--ink-text-muted)">{{ etiqueta }}</p>
+          <p class="text-lg font-bold font-figures mt-0.5" style="color: var(--ink-text)">
+            {{ pendiente.estadisticas.cuentasTotal }}
+          </p>
+          <div class="mt-1 text-xs space-y-0.5" style="color: var(--ink-text-secondary)">
+            <p v-if="pendiente.estadisticas.cuentasNuevas > 0" class="text-emerald-600 dark:text-emerald-400 font-medium">
+              + {{ pendiente.estadisticas.cuentasNuevas }} {{ pendiente.estadisticas.cuentasNuevas === 1 ? 'nuevo' : 'nuevos' }}
+            </p>
+            <p v-if="pendiente.estadisticas.cuentasExistentes > 0" style="color: var(--ink-text-muted)">
+              {{ pendiente.estadisticas.cuentasExistentes }} existentes conservados
+            </p>
+          </div>
+        </div>
+
+        <!-- Facturas (Créditos) -->
+        <div class="rounded p-2.5 border border-[var(--ink-border)] bg-[var(--ink-surface)]">
+          <p class="text-xs uppercase font-medium" style="color: var(--ink-text-muted)">Facturas (Créditos)</p>
+          <p class="text-lg font-bold font-figures mt-0.5" style="color: var(--ink-text)">
+            {{ pendiente.estadisticas.creditosTotal }}
+          </p>
+          <div class="mt-1 text-xs space-y-0.5" style="color: var(--ink-text-secondary)">
+            <p v-if="pendiente.estadisticas.creditosNuevos > 0" class="text-emerald-600 dark:text-emerald-400 font-medium">
+              + {{ pendiente.estadisticas.creditosNuevos }} nuevas a agregar
+            </p>
+            <p v-if="pendiente.estadisticas.creditosExistentesOmitidos > 0" class="text-amber-600 dark:text-amber-400">
+              {{ pendiente.estadisticas.creditosExistentesOmitidos }} ya registradas (no duplicadas)
+            </p>
+          </div>
+        </div>
+
+        <!-- Abonos (Pagos) -->
+        <div class="rounded p-2.5 border border-[var(--ink-border)] bg-[var(--ink-surface)]">
+          <p class="text-xs uppercase font-medium" style="color: var(--ink-text-muted)">Abonos y Cobros</p>
+          <p class="text-lg font-bold font-figures mt-0.5" style="color: var(--ink-text)">
+            {{ pendiente.estadisticas.abonosTotal }}
+          </p>
+          <div class="mt-1 text-xs space-y-0.5" style="color: var(--ink-text-secondary)">
+            <p v-if="pendiente.estadisticas.abonosNuevos > 0" class="text-emerald-600 dark:text-emerald-400 font-medium">
+              + {{ pendiente.estadisticas.abonosNuevos }} nuevos a registrar
+            </p>
+            <p v-if="pendiente.estadisticas.abonosExistentesOmitidos > 0" class="text-amber-600 dark:text-amber-400">
+              {{ pendiente.estadisticas.abonosExistentesOmitidos }} ya registrados (no duplicados)
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detalle por cuenta desplegable -->
+      <details class="text-xs pt-1" style="color: var(--ink-text-secondary)">
+        <summary class="cursor-pointer font-medium hover:underline">
+          Ver desglose detallado por {{ etiquetaSingular }} ({{ pendiente.cuentasAfectadas.length }})
+        </summary>
+        <div class="mt-2 max-h-48 overflow-y-auto space-y-1.5 pr-1">
+          <div
+            v-for="c in pendiente.cuentasAfectadas"
+            :key="c.nombre"
+            class="flex items-center justify-between p-1.5 rounded bg-[var(--ink-surface)] border border-[var(--ink-border)]"
+          >
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span
+                class="h-1.5 w-1.5 rounded-full shrink-0"
+                :style="{ background: c.esNueva ? 'var(--status-good)' : 'var(--cobrar)' }"
+              />
+              <span class="truncate font-medium" style="color: var(--ink-text)">{{ c.nombre }}</span>
+              <span v-if="c.esNueva" class="text-[10px] px-1 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                Nuevo
+              </span>
+            </div>
+            <div class="text-[11px] shrink-0 text-right space-x-2">
+              <span v-if="c.nuevasFacturas > 0" class="text-emerald-600 dark:text-emerald-400 font-mono">
+                +{{ c.nuevasFacturas }} facturas
+              </span>
+              <span v-if="c.facturasOmitidas > 0" class="text-amber-600 dark:text-amber-400 font-mono">
+                {{ c.facturasOmitidas }} existentes
+              </span>
+              <span v-if="c.nuevosAbonos > 0" class="text-blue-600 dark:text-blue-400 font-mono">
+                +{{ c.nuevosAbonos }} abonos
+              </span>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details v-if="pendiente.hojasOmitidas.length" class="text-xs" style="color: var(--ink-text-muted)">
+        <summary class="cursor-pointer">{{ pendiente.hojasOmitidas.length }} hojas omitidas (resumen o sin movimientos)</summary>
         <ul class="mt-1 list-disc pl-4 space-y-0.5">
           <li v-for="h in pendiente.hojasOmitidas" :key="h">{{ h }}</li>
         </ul>
       </details>
-      <div class="mt-3 flex gap-2">
-        <UButton size="sm" color="amber" @click="confirmarImportacion">Confirmar importación</UButton>
-        <UButton size="sm" color="gray" variant="ghost" @click="cancelarImportacion">Cancelar</UButton>
+
+      <!-- Mensaje informativo de sincronización -->
+      <p
+        v-if="settingsStore.connected && settingsStore.tablesReady"
+        class="text-xs flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400"
+      >
+        <UIcon name="i-heroicons-bolt" class="h-4 w-4 shrink-0" />
+        Al confirmar, se guardará en la base de datos de Supabase y aparecerá en tu teléfono al instante.
+      </p>
+      <p
+        v-else
+        class="text-xs flex items-center gap-1.5 text-amber-600 dark:text-amber-400"
+      >
+        <UIcon name="i-heroicons-information-circle" class="h-4 w-4 shrink-0" />
+        Aviso: Supabase no está conectado. Los datos se guardarán solo en este navegador. Para verlos en tu teléfono, vincula Supabase en Ajustes.
+      </p>
+
+      <div class="mt-3 flex gap-2 pt-1">
+        <UButton
+          size="sm"
+          color="amber"
+          :loading="guardando"
+          icon="i-heroicons-check-circle"
+          @click="confirmarImportacion"
+        >
+          Confirmar y sincronizar
+        </UButton>
+        <UButton size="sm" color="gray" variant="ghost" :disabled="guardando" @click="cancelarImportacion">
+          Cancelar
+        </UButton>
       </div>
     </div>
   </UCard>

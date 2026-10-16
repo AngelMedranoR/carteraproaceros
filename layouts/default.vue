@@ -18,11 +18,21 @@ function toggleColorMode() {
 const accountsStore = useAccountsStore()
 const settingsStore = useSettingsStore()
 const sync = useSupabaseSync()
+const toast = useToast()
 
 onMounted(async () => {
   accountsStore.hydrate()
   settingsStore.hydrate()
+  const vinculado = sync.procesarCredencialesDesdeUrl()
   await sync.inicializarSincronizacion()
+  if (vinculado) {
+    toast.add({
+      title: '¡Dispositivo vinculado con éxito!',
+      description: 'Conectado a la base de datos de Cartera 360 en tiempo real.',
+      color: 'green',
+      icon: 'i-heroicons-bolt',
+    })
+  }
 })
 </script>
 
