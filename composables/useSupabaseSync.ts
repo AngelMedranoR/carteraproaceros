@@ -1,5 +1,5 @@
 import type { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js'
-import type { Cuenta, Credito, Abono, SyncResult } from '~/types'
+import type { Cuenta, Credito, Abono, SyncResult, TipoCuenta } from '~/types'
 
 let cachedClient: SupabaseClient | null = null
 let cachedUrl = ''
@@ -7,6 +7,84 @@ let cachedKey = ''
 let realtimeChannel: RealtimeChannel | null = null
 let channelSubscribed = false
 let initializing = false
+
+// Supabase devuelve como máximo 1000 filas por consulta y rechaza peticiones
+// muy grandes, así que se lee y se escribe por lotes.
+const TAMANO_LOTE = 500
+
+function filaCredito(cuentaId: string, cr: Credito) {
+  return {
+    id: cr.id,
+    cuenta_id: cuentaId,
+    // Las planillas a veces traen facturas sin fecha: se guardan como null
+    // porque Postgres no acepta '' en una columna date.
+    fecha: cr.fecha || null,
+    numero_factura: cr.numeroFactura || '',
+    monto_bolivares: cr.montoBolivares,
+    monto_divisas: cr.montoDivisas,
+    tasa_cambio: cr.tasaCambio ?? null,
+    fecha_vencimiento: cr.fechaVencimiento || null,
+    dias_credito: cr.diasCredito ?? null,
+    descripcion: cr.descripcion ?? '',
+  }
+}
+
+function filaAbono(cuentaId: string, ab: Abono) {
+  return {
+    id: ab.id,
+    cuenta_id: cuentaId,
+    fecha: ab.fecha || null,
+    monto_bolivares: ab.montoBolivares,
+    monto_divisas: ab.montoDivisas,
+    tasa_cambio: ab.tasaCambio ?? null,
+    comentario: ab.comentario || '',
+  }
+}
+
+function filaCuenta(c: Cuenta) {
+  return { id: c.id, nombre: c.nombre, tipo: c.tipo, updated_at: new Date().toISOString() }
+}
+
+async function upsertEnLotes(client: SupabaseClient, tabla: string, filas: any[]) {
+  for (let i = 0; i < filas.length; i += TAMANO_LOTE) {
+    const { error } = await client.from(tabla).upsert(filas.slice(i, i + TAMANO_LOTE), { onConflict: 'id' })
+    if (error) throw error
+  }
+}
+
+async function seleccionarTodo(client: SupabaseClient, tabla: string, orden: string) {
+  const filas: any[] = []
+  for (let desde = 0; ; desde += 1000) {
+    const { data, error } = await client
+      .from(tabla)
+      .select('*')
+      .order(orden)
+      .order('id')
+      .range(desde, desde + 999)
+    if (error) throw error
+    filas.push(...(data || []))
+    if (!data || data.length < 1000) return filas
+  }
+}
+
+function mensajeDeError(err: any, porDefecto: string) {
+  const msg: string = err?.message || porDefecto
+  // Bases creadas con la versión anterior del script exigen fecha en todas las filas
+  if (err?.code === '23502' && msg.includes('fecha')) {
+    return 'Hay facturas o abonos sin fecha y tu base de Supabase todavía no los admite. Vuelve a ejecutar el script SQL (Ajustes) y sincroniza de nuevo.'
+  }
+  return msg
+}
+
+async function subirCuentas(client: SupabaseClient, cuentas: Cuenta[]) {
+  const creditosRows = cuentas.flatMap((c) => c.creditos.map((cr) => filaCredito(c.id, cr)))
+  const abonosRows = cuentas.flatMap((c) => c.abonos.map((ab) => filaAbono(c.id, ab)))
+  // Upsert en orden relacional
+  await upsertEnLotes(client, 'cuentas', cuentas.map(filaCuenta))
+  await upsertEnLotes(client, 'creditos', creditosRows)
+  await upsertEnLotes(client, 'abonos', abonosRows)
+  return { cuentasCount: cuentas.length, creditosCount: creditosRows.length, abonosCount: abonosRows.length }
+}
 
 export const SCRIPT_SQL_SUPABASE = `-- ==============================================================================
 -- CARTERA 360 · Esquema de Base de Datos para Supabase
@@ -26,7 +104,7 @@ create table if not exists public.cuentas (
 create table if not exists public.creditos (
   id text primary key,
   cuenta_id text not null references public.cuentas(id) on delete cascade,
-  fecha date not null,
+  fecha date,
   numero_factura text default '' not null,
   monto_bolivares numeric,
   monto_divisas numeric not null default 0,
@@ -41,13 +119,17 @@ create table if not exists public.creditos (
 create table if not exists public.abonos (
   id text primary key,
   cuenta_id text not null references public.cuentas(id) on delete cascade,
-  fecha date not null,
+  fecha date,
   monto_bolivares numeric,
   monto_divisas numeric not null default 0,
   tasa_cambio numeric,
   comentario text default '' not null,
   created_at timestamptz default now() not null
 );
+
+-- Las planillas pueden traer facturas o abonos sin fecha (bases creadas antes de este cambio)
+alter table public.creditos alter column fecha drop not null;
+alter table public.abonos alter column fecha drop not null;
 
 -- 4. Índices para acelerar consultas y ordenamiento
 create index if not exists idx_creditos_cuenta_id on public.creditos(cuenta_id);
@@ -219,64 +301,7 @@ export function useSupabaseSync() {
       accountsStore.hydrate()
       const cuentas = accountsStore.cuentas
 
-      // Mapear Cuentas
-      const cuentasRows = cuentas.map((c) => ({
-        id: c.id,
-        nombre: c.nombre,
-        tipo: c.tipo,
-        updated_at: new Date().toISOString(),
-      }))
-
-      // Mapear Créditos
-      const creditosRows: any[] = []
-      for (const c of cuentas) {
-        for (const cr of c.creditos) {
-          creditosRows.push({
-            id: cr.id,
-            cuenta_id: c.id,
-            fecha: cr.fecha,
-            numero_factura: cr.numeroFactura || '',
-            monto_bolivares: cr.montoBolivares,
-            monto_divisas: cr.montoDivisas,
-            tasa_cambio: cr.tasaCambio ?? null,
-            fecha_vencimiento: cr.fechaVencimiento ?? null,
-            dias_credito: cr.diasCredito ?? null,
-            descripcion: cr.descripcion ?? '',
-          })
-        }
-      }
-
-      // Mapear Abonos
-      const abonosRows: any[] = []
-      for (const c of cuentas) {
-        for (const ab of c.abonos) {
-          abonosRows.push({
-            id: ab.id,
-            cuenta_id: c.id,
-            fecha: ab.fecha,
-            monto_bolivares: ab.montoBolivares,
-            monto_divisas: ab.montoDivisas,
-            tasa_cambio: ab.tasaCambio ?? null,
-            comentario: ab.comentario || '',
-          })
-        }
-      }
-
-      // Upsert en orden relacional
-      if (cuentasRows.length > 0) {
-        const { error: errCuentas } = await client.from('cuentas').upsert(cuentasRows, { onConflict: 'id' })
-        if (errCuentas) throw errCuentas
-      }
-
-      if (creditosRows.length > 0) {
-        const { error: errCreditos } = await client.from('creditos').upsert(creditosRows, { onConflict: 'id' })
-        if (errCreditos) throw errCreditos
-      }
-
-      if (abonosRows.length > 0) {
-        const { error: errAbonos } = await client.from('abonos').upsert(abonosRows, { onConflict: 'id' })
-        if (errAbonos) throw errAbonos
-      }
+      const { cuentasCount, creditosCount, abonosCount } = await subirCuentas(client, cuentas)
 
       settings.setSyncStatus('success')
       settings.lastSyncAt = new Date().toISOString()
@@ -284,14 +309,14 @@ export function useSupabaseSync() {
 
       return {
         ok: true,
-        mensaje: `Respaldo exitoso: ${cuentasRows.length} cuentas, ${creditosRows.length} facturas y ${abonosRows.length} abonos subidos a la nube.`,
-        cuentasCount: cuentasRows.length,
-        creditosCount: creditosRows.length,
-        abonosCount: abonosRows.length,
+        mensaje: `Respaldo exitoso: ${cuentasCount} cuentas, ${creditosCount} facturas y ${abonosCount} abonos subidos a la nube.`,
+        cuentasCount,
+        creditosCount,
+        abonosCount,
       }
     } catch (err: any) {
       settings.setSyncStatus('error')
-      const msg = err?.message || 'Error al subir los datos a Supabase.'
+      const msg = mensajeDeError(err, 'Error al subir los datos a Supabase.')
       settings.lastError = msg
       settings.persist()
       return { ok: false, mensaje: msg, error: msg }
@@ -304,19 +329,11 @@ export function useSupabaseSync() {
       const client = await getClient()
       if (!client) throw new Error('Supabase no está configurado.')
 
-      const [resCuentas, resCreditos, resAbonos] = await Promise.all([
-        client.from('cuentas').select('*').order('nombre'),
-        client.from('creditos').select('*').order('fecha'),
-        client.from('abonos').select('*').order('fecha'),
+      const [rawCuentas, rawCreditos, rawAbonos] = await Promise.all([
+        seleccionarTodo(client, 'cuentas', 'nombre'),
+        seleccionarTodo(client, 'creditos', 'fecha'),
+        seleccionarTodo(client, 'abonos', 'fecha'),
       ])
-
-      if (resCuentas.error) throw resCuentas.error
-      if (resCreditos.error) throw resCreditos.error
-      if (resAbonos.error) throw resAbonos.error
-
-      const rawCuentas = resCuentas.data || []
-      const rawCreditos = resCreditos.data || []
-      const rawAbonos = resAbonos.data || []
 
       // Reconstruir estructura de datos de Cartera 360
       const cuentasReconstruidas: Cuenta[] = rawCuentas.map((c) => {
@@ -324,7 +341,7 @@ export function useSupabaseSync() {
           .filter((cr) => cr.cuenta_id === c.id)
           .map((cr) => ({
             id: cr.id,
-            fecha: cr.fecha,
+            fecha: cr.fecha || '',
             numeroFactura: cr.numero_factura || '',
             montoBolivares: cr.monto_bolivares !== null ? Number(cr.monto_bolivares) : null,
             montoDivisas: Number(cr.monto_divisas) || 0,
@@ -338,7 +355,7 @@ export function useSupabaseSync() {
           .filter((ab) => ab.cuenta_id === c.id)
           .map((ab) => ({
             id: ab.id,
-            fecha: ab.fecha,
+            fecha: ab.fecha || '',
             montoBolivares: ab.monto_bolivares !== null ? Number(ab.monto_bolivares) : null,
             montoDivisas: Number(ab.monto_divisas) || 0,
             tasaCambio: ab.tasa_cambio !== null ? Number(ab.tasa_cambio) : null,
@@ -396,15 +413,7 @@ export function useSupabaseSync() {
     try {
       const client = await getClient()
       if (!client) return
-      await client.from('cuentas').upsert(
-        {
-          id: cuenta.id,
-          nombre: cuenta.nombre,
-          tipo: cuenta.tipo,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'id' }
-      )
+      await client.from('cuentas').upsert(filaCuenta(cuenta), { onConflict: 'id' })
     } catch (e) {
       console.warn('Auto-sync cuenta error:', e)
     }
@@ -426,21 +435,7 @@ export function useSupabaseSync() {
     try {
       const client = await getClient()
       if (!client) return
-      await client.from('creditos').upsert(
-        {
-          id: credito.id,
-          cuenta_id: cuentaId,
-          fecha: credito.fecha,
-          numero_factura: credito.numeroFactura || '',
-          monto_bolivares: credito.montoBolivares,
-          monto_divisas: credito.montoDivisas,
-          tasa_cambio: credito.tasaCambio ?? null,
-          fecha_vencimiento: credito.fechaVencimiento ?? null,
-          dias_credito: credito.diasCredito ?? null,
-          descripcion: credito.descripcion ?? '',
-        },
-        { onConflict: 'id' }
-      )
+      await client.from('creditos').upsert(filaCredito(cuentaId, credito), { onConflict: 'id' })
     } catch (e) {
       console.warn('Auto-sync credito error:', e)
     }
@@ -462,18 +457,7 @@ export function useSupabaseSync() {
     try {
       const client = await getClient()
       if (!client) return
-      await client.from('abonos').upsert(
-        {
-          id: abono.id,
-          cuenta_id: cuentaId,
-          fecha: abono.fecha,
-          monto_bolivares: abono.montoBolivares,
-          monto_divisas: abono.montoDivisas,
-          tasa_cambio: abono.tasaCambio ?? null,
-          comentario: abono.comentario || '',
-        },
-        { onConflict: 'id' }
-      )
+      await client.from('abonos').upsert(filaAbono(cuentaId, abono), { onConflict: 'id' })
     } catch (e) {
       console.warn('Auto-sync abono error:', e)
     }
@@ -487,6 +471,43 @@ export function useSupabaseSync() {
       await client.from('abonos').delete().eq('id', abonoId)
     } catch (e) {
       console.warn('Auto-sync eliminar abono error:', e)
+    }
+  }
+
+  // Al importar un Excel se reemplazan todas las cuentas de ese tipo: se suben
+  // las nuevas (con sus facturas y abonos) y luego se borran de la nube las
+  // anteriores, para que los demás dispositivos vean exactamente lo importado.
+  const reemplazarTipoEnLaNube = async (tipo: TipoCuenta, cuentas: Cuenta[]): Promise<SyncResult | null> => {
+    if (!settings.connected || !settings.tablesReady || !settings.autoSync) return null
+    try {
+      settings.setSyncStatus('syncing')
+      const client = await getClient()
+      if (!client) return null
+
+      const conteo = await subirCuentas(client, cuentas)
+
+      const nuevas = new Set(cuentas.map((c) => c.id))
+      const existentes = await seleccionarTodo(client, 'cuentas', 'id')
+      const obsoletas = existentes.filter((c) => c.tipo === tipo && !nuevas.has(c.id)).map((c) => c.id)
+      for (let i = 0; i < obsoletas.length; i += 100) {
+        const { error } = await client.from('cuentas').delete().in('id', obsoletas.slice(i, i + 100))
+        if (error) throw error
+      }
+
+      settings.setSyncStatus('success')
+      settings.lastSyncAt = new Date().toISOString()
+      settings.persist()
+      return {
+        ok: true,
+        mensaje: `${conteo.cuentasCount} cuentas, ${conteo.creditosCount} facturas y ${conteo.abonosCount} abonos subidos a la nube.`,
+        ...conteo,
+      }
+    } catch (err: any) {
+      settings.setSyncStatus('error')
+      const msg = mensajeDeError(err, 'Error al subir la importación a Supabase.')
+      settings.lastError = msg
+      settings.persist()
+      return { ok: false, mensaje: msg, error: msg }
     }
   }
 
@@ -608,6 +629,7 @@ export function useSupabaseSync() {
     eliminarCreditoEnSegundoPlano,
     sincronizarAbonoEnSegundoPlano,
     eliminarAbonoEnSegundoPlano,
+    reemplazarTipoEnLaNube,
     scriptSql: SCRIPT_SQL_SUPABASE,
   }
 }

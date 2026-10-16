@@ -182,7 +182,7 @@ export const useAccountsStore = defineStore('accounts', {
         if (!cuenta) return
         const credito: Credito = {
           id: newRow.id,
-          fecha: newRow.fecha,
+          fecha: newRow.fecha || '',
           numeroFactura: newRow.numero_factura || '',
           montoBolivares:
             newRow.monto_bolivares !== null && newRow.monto_bolivares !== undefined
@@ -227,7 +227,7 @@ export const useAccountsStore = defineStore('accounts', {
         if (!cuenta) return
         const abono: Abono = {
           id: newRow.id,
-          fecha: newRow.fecha,
+          fecha: newRow.fecha || '',
           montoBolivares:
             newRow.monto_bolivares !== null && newRow.monto_bolivares !== undefined
               ? Number(newRow.monto_bolivares)

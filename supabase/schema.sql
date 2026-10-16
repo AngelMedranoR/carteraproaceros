@@ -16,7 +16,7 @@ create table if not exists public.cuentas (
 create table if not exists public.creditos (
   id text primary key,
   cuenta_id text not null references public.cuentas(id) on delete cascade,
-  fecha date not null,
+  fecha date,
   numero_factura text default '' not null,
   monto_bolivares numeric,
   monto_divisas numeric not null default 0,
@@ -31,13 +31,17 @@ create table if not exists public.creditos (
 create table if not exists public.abonos (
   id text primary key,
   cuenta_id text not null references public.cuentas(id) on delete cascade,
-  fecha date not null,
+  fecha date,
   monto_bolivares numeric,
   monto_divisas numeric not null default 0,
   tasa_cambio numeric,
   comentario text default '' not null,
   created_at timestamptz default now() not null
 );
+
+-- Las planillas pueden traer facturas o abonos sin fecha (bases creadas antes de este cambio)
+alter table public.creditos alter column fecha drop not null;
+alter table public.abonos alter column fecha drop not null;
 
 -- 4. Índices para acelerar consultas y ordenamiento
 create index if not exists idx_creditos_cuenta_id on public.creditos(cuenta_id);

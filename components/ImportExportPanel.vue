@@ -3,6 +3,7 @@ const props = defineProps<{ tipo: 'cliente' | 'proveedor' }>()
 
 const store = useAccountsStore()
 const { parseWorkbook, exportarCuentas } = useExcel()
+const sync = useSupabaseSync()
 const toast = useToast()
 
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -50,18 +51,34 @@ async function onFileChange(e: Event) {
   }
 }
 
-function confirmarImportacion() {
+async function confirmarImportacion() {
   if (!pendiente.value) return
-  store.reemplazarCuentasDeTipo(props.tipo, pendiente.value.cuentas)
+  const { cuentas, hojasOmitidas } = pendiente.value
+  pendiente.value = null
+  store.reemplazarCuentasDeTipo(props.tipo, cuentas)
   toast.add({
-    title: `${pendiente.value.cuentas.length} ${etiqueta} importados`,
-    description: pendiente.value.hojasOmitidas.length
-      ? `Se omitieron ${pendiente.value.hojasOmitidas.length} hojas (ocultas o de resumen).`
+    title: `${cuentas.length} ${etiqueta} importados`,
+    description: hojasOmitidas.length
+      ? `Se omitieron ${hojasOmitidas.length} hojas (ocultas o de resumen).`
       : undefined,
     icon: 'i-heroicons-check-circle',
     color: 'green',
   })
-  pendiente.value = null
+
+  // Subir la importación a Supabase para que el resto de dispositivos la vea
+  cargando.value = true
+  const res = await sync.reemplazarTipoEnLaNube(props.tipo, cuentas)
+  cargando.value = false
+  if (res) {
+    toast.add({
+      title: res.ok ? 'Importación guardada en la nube' : 'La importación no se pudo subir a la nube',
+      description: res.ok
+        ? res.mensaje
+        : `${res.mensaje} Los datos siguen en este dispositivo; usa "Sincronizar" en Ajustes para reintentar.`,
+      icon: res.ok ? 'i-heroicons-cloud-arrow-up' : 'i-heroicons-exclamation-triangle',
+      color: res.ok ? 'green' : 'red',
+    })
+  }
 }
 
 function cancelarImportacion() {
