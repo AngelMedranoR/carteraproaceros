@@ -24,9 +24,10 @@ async function probar() {
   probando.value = false
 
   if (res.ok && res.tablesReady) {
+    await sync.iniciarSuscripcionRealtime()
     toast.add({
       title: 'Conexión exitosa',
-      description: 'Supabase está conectado y todas las tablas están listas.',
+      description: 'Supabase está conectado, tablas listas y transmisión en tiempo real activa.',
       color: 'green',
       icon: 'i-heroicons-check-circle',
     })
@@ -52,11 +53,25 @@ async function sincronizarAhora() {
   const res = await sync.sincronizar()
   sincronizando.value = false
 
+  if (res.ok) {
+    await sync.iniciarSuscripcionRealtime()
+  }
+
   toast.add({
     title: res.ok ? 'Sincronización completada' : 'Error al sincronizar',
     description: res.mensaje,
     color: res.ok ? 'green' : 'red',
     icon: res.ok ? 'i-heroicons-arrow-path' : 'i-heroicons-exclamation-triangle',
+  })
+}
+
+async function conectarRealtime() {
+  await sync.iniciarSuscripcionRealtime()
+  toast.add({
+    title: 'Transmisión en tiempo real iniciada',
+    description: 'Los cambios se reflejarán instantáneamente en todos los dispositivos conectados.',
+    color: 'green',
+    icon: 'i-heroicons-bolt',
   })
 }
 
@@ -79,6 +94,10 @@ async function descargarNube() {
   const res = await sync.descargarDeSupabase()
   descargando.value = false
 
+  if (res.ok) {
+    await sync.iniciarSuscripcionRealtime()
+  }
+
   toast.add({
     title: res.ok ? 'Datos restaurados de la nube' : 'Error al descargar',
     description: res.mensaje,
@@ -87,7 +106,8 @@ async function descargarNube() {
   })
 }
 
-function desconectar() {
+async function desconectar() {
+  await sync.detenerSuscripcionRealtime()
   settings.desconectar()
   toast.add({ title: 'Desconectado de Supabase', color: 'gray', icon: 'i-heroicons-cloud' })
 }
@@ -185,7 +205,18 @@ function guardarAlertas() {
           </div>
           <div>
             <span
-              v-if="settings.connected && settings.tablesReady"
+              v-if="settings.realtimeActivo"
+              class="inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium"
+              style="color: var(--status-good); background: color-mix(in srgb, var(--status-good) 15%, transparent)"
+            >
+              <span class="relative flex h-2 w-2">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style="background: var(--status-good)" />
+                <span class="relative inline-flex rounded-full h-2 w-2" style="background: var(--status-good)" />
+              </span>
+              En tiempo real (Activo)
+            </span>
+            <span
+              v-else-if="settings.connected && settings.tablesReady"
               class="inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium"
               style="color: var(--status-good); background: color-mix(in srgb, var(--status-good) 15%, transparent)"
             >
@@ -212,10 +243,20 @@ function guardarAlertas() {
         </div>
       </template>
 
-      <p class="text-xs sm:text-sm mb-4" style="color: var(--ink-text-secondary)">
-        Conecta un proyecto de <strong>Supabase</strong> para que tus cuentas por cobrar y pagar se sincronicen en la nube.
-        Tus datos seguirán estando disponibles incluso sin conexión a internet y se actualizarán automáticamente.
+      <p class="text-xs sm:text-sm mb-3" style="color: var(--ink-text-secondary)">
+        Conecta tu proyecto de <strong>Supabase</strong> para que todas las cuentas, facturas y pagos se sincronicen como una base de datos única y compartida.
+        Cualquier cambio se transmite a los demás dispositivos en tiempo real y sin necesidad de recargar.
       </p>
+
+      <div class="rounded-sm p-3 mb-4 text-xs sm:text-sm border flex items-start gap-2.5 bg-[var(--ink-surface-sunken)] border-[var(--ink-border)]">
+        <UIcon name="i-heroicons-device-phone-mobile" class="h-5 w-5 shrink-0 mt-0.5" style="color: var(--cobrar)" />
+        <div class="space-y-1">
+          <p class="font-medium" style="color: var(--ink-text)">Para conectar todos los teléfonos automáticamente</p>
+          <p style="color: var(--ink-text-muted)">
+            Puedes agregar las variables <code>SUPABASE_URL</code> y <code>SUPABASE_ANON_KEY</code> en la configuración de <strong>Netlify</strong> (Site configuration &gt; Environment variables). Así cualquier persona que abra el enlace desde su teléfono quedará conectada de inmediato a la misma base de datos sin tener que escribir las claves.
+          </p>
+        </div>
+      </div>
 
       <div class="space-y-4">
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
@@ -294,6 +335,16 @@ function guardarAlertas() {
             @click="sincronizarAhora"
           >
             Sincronizar ahora
+          </UButton>
+
+          <UButton
+            v-if="settings.connected && settings.tablesReady && !settings.realtimeActivo"
+            color="emerald"
+            variant="soft"
+            icon="i-heroicons-bolt"
+            @click="conectarRealtime"
+          >
+            Activar tiempo real
           </UButton>
 
           <UButton

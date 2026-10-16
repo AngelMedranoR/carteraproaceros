@@ -1,9 +1,12 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js'
 import type { Cuenta, Credito, Abono, SyncResult } from '~/types'
 
 let cachedClient: SupabaseClient | null = null
 let cachedUrl = ''
 let cachedKey = ''
+let realtimeChannel: RealtimeChannel | null = null
+let channelSubscribed = false
+let initializing = false
 
 export const SCRIPT_SQL_SUPABASE = `-- ==============================================================================
 -- CARTERA 360 · Esquema de Base de Datos para Supabase
@@ -77,6 +80,37 @@ create policy "Acceso anonimo total a abonos" on public.abonos
   for all
   using (true)
   with check (true);
+
+-- 7. Habilitar Tiempo Real (Realtime) para sincronización multidispositivo instantánea
+-- Permite que los cambios se transmitan por WebSocket a todos los teléfonos y navegadores conectados
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'cuentas'
+  ) then
+    alter publication supabase_realtime add table public.cuentas;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'creditos'
+  ) then
+    alter publication supabase_realtime add table public.creditos;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'abonos'
+  ) then
+    alter publication supabase_realtime add table public.abonos;
+  end if;
+end $$;
+
+-- Replica Identity Full para que las eliminaciones envíen la fila completa
+alter table public.cuentas replica identity full;
+alter table public.creditos replica identity full;
+alter table public.abonos replica identity full;
 `
 
 export function useSupabaseSync() {
@@ -456,12 +490,118 @@ export function useSupabaseSync() {
     }
   }
 
+  const iniciarSuscripcionRealtime = async () => {
+    try {
+      const client = await getClient()
+      if (!client) return
+
+      if (realtimeChannel && channelSubscribed) {
+        settings.setRealtimeActivo(true)
+        return realtimeChannel
+      }
+
+      if (realtimeChannel) {
+        try {
+          await client.removeChannel(realtimeChannel)
+        } catch {}
+        realtimeChannel = null
+        channelSubscribed = false
+      }
+
+      const channel = client
+        .channel('cartera360-live-sync')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'cuentas' },
+          (payload) => {
+            accountsStore.manejarEventoRealtimeCuentas(payload as any)
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'creditos' },
+          (payload) => {
+            accountsStore.manejarEventoRealtimeCreditos(payload as any)
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'abonos' },
+          (payload) => {
+            accountsStore.manejarEventoRealtimeAbonos(payload as any)
+          }
+        )
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            channelSubscribed = true
+            settings.setRealtimeActivo(true)
+          } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            channelSubscribed = false
+            settings.setRealtimeActivo(false)
+          }
+        })
+
+      realtimeChannel = channel
+      return channel
+    } catch (e) {
+      console.warn('Error al iniciar suscripción Realtime:', e)
+      settings.setRealtimeActivo(false)
+    }
+  }
+
+  const detenerSuscripcionRealtime = async () => {
+    if (!realtimeChannel) return
+    try {
+      const client = await getClient()
+      if (client) {
+        await client.removeChannel(realtimeChannel)
+      }
+    } catch {}
+    realtimeChannel = null
+    channelSubscribed = false
+    settings.setRealtimeActivo(false)
+  }
+
+  const inicializarSincronizacion = async () => {
+    if (initializing) return
+    initializing = true
+    try {
+      const { url, anonKey } = getEffectiveCredentials()
+      if (!url || !anonKey) {
+        settings.connected = false
+        settings.tablesReady = false
+        settings.setRealtimeActivo(false)
+        return
+      }
+
+      // Probar conexión y tablas en Supabase
+      const check = await probarConexion()
+      if (!check.ok || !check.tablesReady) {
+        return
+      }
+
+      // Descargar el estado consolidado de la nube al iniciar para que
+      // cualquier cambio hecho desde otro teléfono esté disponible de inmediato
+      await descargarDeSupabase()
+
+      // Iniciar el canal de transmisión en vivo
+      await iniciarSuscripcionRealtime()
+    } catch (e) {
+      console.warn('Error durante inicialización de sincronización:', e)
+    } finally {
+      initializing = false
+    }
+  }
+
   return {
     getClient,
     probarConexion,
     subirASupabase,
     descargarDeSupabase,
     sincronizar,
+    iniciarSuscripcionRealtime,
+    detenerSuscripcionRealtime,
+    inicializarSincronizacion,
     sincronizarCuentaEnSegundoPlano,
     eliminarCuentaEnSegundoPlano,
     sincronizarCreditoEnSegundoPlano,

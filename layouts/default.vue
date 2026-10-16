@@ -17,9 +17,12 @@ function toggleColorMode() {
 
 const accountsStore = useAccountsStore()
 const settingsStore = useSettingsStore()
-onMounted(() => {
+const sync = useSupabaseSync()
+
+onMounted(async () => {
   accountsStore.hydrate()
   settingsStore.hydrate()
+  await sync.inicializarSincronizacion()
 })
 </script>
 
@@ -62,28 +65,39 @@ onMounted(() => {
           to="/ajustes"
           class="flex items-center justify-between rounded-sm px-3 py-2 text-xs border transition-colors hover:border-[var(--ink-border-focus)]"
           :style="
-            settingsStore.connected && settingsStore.tablesReady
+            settingsStore.realtimeActivo
+              ? 'background: color-mix(in srgb, var(--status-good) 12%, transparent); border-color: color-mix(in srgb, var(--status-good) 40%, transparent); color: var(--ink-text)'
+              : settingsStore.connected && settingsStore.tablesReady
               ? 'background: color-mix(in srgb, var(--status-good) 8%, transparent); border-color: color-mix(in srgb, var(--status-good) 30%, transparent); color: var(--ink-text)'
               : 'background: var(--ink-surface-sunken); border-color: var(--ink-border); color: var(--ink-text-secondary)'
           "
         >
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 min-w-0">
             <UIcon
               :name="
                 settingsStore.syncStatus === 'syncing'
                   ? 'i-heroicons-arrow-path'
+                  : settingsStore.realtimeActivo
+                  ? 'i-heroicons-bolt'
                   : settingsStore.connected
                   ? 'i-heroicons-cloud'
                   : 'i-heroicons-circle-stack'
               "
-              class="h-4 w-4"
+              class="h-4 w-4 shrink-0"
               :class="{ 'animate-spin': settingsStore.syncStatus === 'syncing' }"
-              :style="{ color: settingsStore.connected && settingsStore.tablesReady ? 'var(--status-good)' : 'var(--ink-text-muted)' }"
+              :style="{
+                color:
+                  settingsStore.realtimeActivo || (settingsStore.connected && settingsStore.tablesReady)
+                    ? 'var(--status-good)'
+                    : 'var(--ink-text-muted)',
+              }"
             />
             <span class="truncate">
               {{
                 settingsStore.syncStatus === 'syncing'
                   ? 'Sincronizando...'
+                  : settingsStore.realtimeActivo
+                  ? 'En tiempo real'
                   : settingsStore.connected && settingsStore.tablesReady
                   ? 'Nube activa'
                   : settingsStore.connected
@@ -92,17 +106,24 @@ onMounted(() => {
               }}
             </span>
           </div>
-          <span
-            class="h-2 w-2 rounded-full shrink-0"
-            :style="{
-              background:
-                settingsStore.connected && settingsStore.tablesReady
-                  ? 'var(--status-good)'
-                  : settingsStore.connected
-                  ? 'var(--status-warning)'
-                  : 'var(--ink-text-muted)',
-            }"
-          />
+          <span class="relative flex h-2 w-2 shrink-0">
+            <span
+              v-if="settingsStore.realtimeActivo"
+              class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
+              style="background: var(--status-good)"
+            />
+            <span
+              class="relative inline-flex rounded-full h-2 w-2"
+              :style="{
+                background:
+                  settingsStore.realtimeActivo || (settingsStore.connected && settingsStore.tablesReady)
+                    ? 'var(--status-good)'
+                    : settingsStore.connected
+                    ? 'var(--status-warning)'
+                    : 'var(--ink-text-muted)',
+              }"
+            />
+          </span>
         </NuxtLink>
 
         <button
@@ -131,18 +152,31 @@ onMounted(() => {
             to="/ajustes"
             class="flex items-center gap-1.5 px-2 py-1 rounded text-xs border"
             :style="
-              settingsStore.connected && settingsStore.tablesReady
+              settingsStore.realtimeActivo || (settingsStore.connected && settingsStore.tablesReady)
                 ? 'background: color-mix(in srgb, var(--status-good) 10%, transparent); border-color: var(--status-good); color: var(--status-good)'
                 : 'background: var(--ink-surface-sunken); border-color: var(--ink-border); color: var(--ink-text-muted)'
             "
           >
+            <span v-if="settingsStore.realtimeActivo" class="relative flex h-2 w-2 shrink-0">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style="background: var(--status-good)" />
+              <span class="relative inline-flex rounded-full h-2 w-2" style="background: var(--status-good)" />
+            </span>
             <UIcon
+              v-else
               :name="settingsStore.syncStatus === 'syncing' ? 'i-heroicons-arrow-path' : 'i-heroicons-cloud'"
               class="h-3.5 w-3.5"
               :class="{ 'animate-spin': settingsStore.syncStatus === 'syncing' }"
             />
             <span class="hidden sm:inline">
-              {{ settingsStore.connected && settingsStore.tablesReady ? 'Nube' : 'Local' }}
+              {{
+                settingsStore.syncStatus === 'syncing'
+                  ? 'Sincronizando'
+                  : settingsStore.realtimeActivo
+                  ? 'En vivo'
+                  : settingsStore.connected && settingsStore.tablesReady
+                  ? 'Nube'
+                  : 'Local'
+              }}
             </span>
           </NuxtLink>
           <button aria-label="Cambiar tema" style="color: var(--ink-text-secondary)" @click="toggleColorMode">

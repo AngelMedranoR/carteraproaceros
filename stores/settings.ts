@@ -18,6 +18,7 @@ export const useSettingsStore = defineStore('settings', {
     diasCreditoPorDefecto: 15,
     diasAlertaCobro: 5,
     diasCreditoCliente: 15,
+    realtimeActivo: false,
     hydrated: false,
   }),
   actions: {
@@ -80,9 +81,13 @@ export const useSettingsStore = defineStore('settings', {
     setSyncStatus(status: SyncStatus) {
       this.syncStatus = status
     },
+    setRealtimeActivo(activo: boolean) {
+      this.realtimeActivo = activo
+    },
     desconectar() {
       this.connected = false
       this.tablesReady = false
+      this.realtimeActivo = false
       this.lastError = ''
       this.syncStatus = 'idle'
       this.persist()

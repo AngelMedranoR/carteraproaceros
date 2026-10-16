@@ -74,6 +74,37 @@ create policy "Acceso anonimo total a abonos" on public.abonos
   using (true)
   with check (true);
 
+-- 7. Habilitar Tiempo Real (Realtime) para sincronización multidispositivo instantánea
+-- Permite que los cambios se transmitan por WebSocket a todos los teléfonos y navegadores conectados
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'cuentas'
+  ) then
+    alter publication supabase_realtime add table public.cuentas;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'creditos'
+  ) then
+    alter publication supabase_realtime add table public.creditos;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'abonos'
+  ) then
+    alter publication supabase_realtime add table public.abonos;
+  end if;
+end $$;
+
+-- Replica Identity Full para que las eliminaciones envíen la fila completa
+alter table public.cuentas replica identity full;
+alter table public.creditos replica identity full;
+alter table public.abonos replica identity full;
+
 -- Notificación de esquema listo
 comment on table public.cuentas is 'Cuentas de clientes y proveedores de Cartera 360';
 comment on table public.creditos is 'Facturas de crédito (por cobrar o por pagar) de Cartera 360';

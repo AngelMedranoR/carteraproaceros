@@ -129,7 +129,7 @@ export const useAccountsStore = defineStore('accounts', {
       this.persist()
       try {
         const sync = useSupabaseSync()
-        sync.eliminarCreditoRemoto(creditoId)
+        sync.eliminarCreditoEnSegundoPlano(creditoId)
       } catch {}
     },
     eliminarAbono(cuentaId: string, abonoId: string) {
@@ -139,7 +139,7 @@ export const useAccountsStore = defineStore('accounts', {
       this.persist()
       try {
         const sync = useSupabaseSync()
-        sync.eliminarAbonoRemoto(abonoId)
+        sync.eliminarAbonoEnSegundoPlano(abonoId)
       } catch {}
     },
     reemplazarCuentasDeTipo(tipo: TipoCuenta, cuentas: Cuenta[]) {
@@ -149,6 +149,114 @@ export const useAccountsStore = defineStore('accounts', {
     reemplazarTodasLasCuentas(cuentas: Cuenta[]) {
       this.cuentas = cuentas
       this.persist()
+    },
+    manejarEventoRealtimeCuentas(payload: { eventType: string; new: any; old: any }) {
+      const { eventType, new: newRow, old: oldRow } = payload
+      if (eventType === 'INSERT' || eventType === 'UPDATE') {
+        if (!newRow?.id) return
+        const idx = this.cuentas.findIndex((c) => c.id === newRow.id)
+        if (idx !== -1) {
+          this.cuentas[idx].nombre = newRow.nombre
+          this.cuentas[idx].tipo = newRow.tipo
+        } else {
+          this.cuentas.push({
+            id: newRow.id,
+            nombre: newRow.nombre,
+            tipo: newRow.tipo,
+            creditos: [],
+            abonos: [],
+          })
+        }
+        this.persist()
+      } else if (eventType === 'DELETE') {
+        if (!oldRow?.id) return
+        this.cuentas = this.cuentas.filter((c) => c.id !== oldRow.id)
+        this.persist()
+      }
+    },
+    manejarEventoRealtimeCreditos(payload: { eventType: string; new: any; old: any }) {
+      const { eventType, new: newRow, old: oldRow } = payload
+      if (eventType === 'INSERT' || eventType === 'UPDATE') {
+        if (!newRow?.id || !newRow?.cuenta_id) return
+        const cuenta = this.cuentas.find((c) => c.id === newRow.cuenta_id)
+        if (!cuenta) return
+        const credito: Credito = {
+          id: newRow.id,
+          fecha: newRow.fecha,
+          numeroFactura: newRow.numero_factura || '',
+          montoBolivares:
+            newRow.monto_bolivares !== null && newRow.monto_bolivares !== undefined
+              ? Number(newRow.monto_bolivares)
+              : null,
+          montoDivisas: Number(newRow.monto_divisas) || 0,
+          tasaCambio:
+            newRow.tasa_cambio !== null && newRow.tasa_cambio !== undefined
+              ? Number(newRow.tasa_cambio)
+              : null,
+          fechaVencimiento: newRow.fecha_vencimiento || null,
+          diasCredito:
+            newRow.dias_credito !== null && newRow.dias_credito !== undefined
+              ? Number(newRow.dias_credito)
+              : null,
+          descripcion: newRow.descripcion || '',
+        }
+        const idx = cuenta.creditos.findIndex((cr) => cr.id === credito.id)
+        if (idx !== -1) {
+          cuenta.creditos[idx] = credito
+        } else {
+          cuenta.creditos.push(credito)
+        }
+        this.persist()
+      } else if (eventType === 'DELETE') {
+        if (!oldRow?.id) return
+        for (const c of this.cuentas) {
+          const prevLen = c.creditos.length
+          c.creditos = c.creditos.filter((cr) => cr.id !== oldRow.id)
+          if (c.creditos.length !== prevLen) {
+            this.persist()
+            break
+          }
+        }
+      }
+    },
+    manejarEventoRealtimeAbonos(payload: { eventType: string; new: any; old: any }) {
+      const { eventType, new: newRow, old: oldRow } = payload
+      if (eventType === 'INSERT' || eventType === 'UPDATE') {
+        if (!newRow?.id || !newRow?.cuenta_id) return
+        const cuenta = this.cuentas.find((c) => c.id === newRow.cuenta_id)
+        if (!cuenta) return
+        const abono: Abono = {
+          id: newRow.id,
+          fecha: newRow.fecha,
+          montoBolivares:
+            newRow.monto_bolivares !== null && newRow.monto_bolivares !== undefined
+              ? Number(newRow.monto_bolivares)
+              : null,
+          montoDivisas: Number(newRow.monto_divisas) || 0,
+          tasaCambio:
+            newRow.tasa_cambio !== null && newRow.tasa_cambio !== undefined
+              ? Number(newRow.tasa_cambio)
+              : null,
+          comentario: newRow.comentario || '',
+        }
+        const idx = cuenta.abonos.findIndex((ab) => ab.id === abono.id)
+        if (idx !== -1) {
+          cuenta.abonos[idx] = abono
+        } else {
+          cuenta.abonos.push(abono)
+        }
+        this.persist()
+      } else if (eventType === 'DELETE') {
+        if (!oldRow?.id) return
+        for (const c of this.cuentas) {
+          const prevLen = c.abonos.length
+          c.abonos = c.abonos.filter((ab) => ab.id !== oldRow.id)
+          if (c.abonos.length !== prevLen) {
+            this.persist()
+            break
+          }
+        }
+      }
     },
   },
 })
