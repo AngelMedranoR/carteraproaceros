@@ -8,7 +8,7 @@ const router = useRouter()
 const store = useAccountsStore()
 const toast = useToast()
 const { formatDivisas, formatBolivares, formatTasa, formatDate } = useCurrency()
-const { getEstado, getEstadoFactura } = useAccountStatus()
+const { getEstado, getEstadoFactura, getEstadosFacturasCuenta } = useAccountStatus()
 
 const rutaBase = props.tipo === 'cliente' ? '/cobrar' : '/pagar'
 const acento = props.tipo === 'cliente' ? 'var(--cobrar)' : 'var(--pagar)'
@@ -19,9 +19,24 @@ const cuenta = computed(() => store.cuentas.find((c) => c.id === route.params.id
 const saldo = computed(() => (cuenta.value ? saldoPendiente(cuenta.value) : 0))
 const estado = computed(() => (cuenta.value ? getEstado(cuenta.value) : 'pendiente'))
 
-const creditosOrdenados = computed(() =>
-  cuenta.value ? [...cuenta.value.creditos].sort((a, b) => (b.fecha || '').localeCompare(a.fecha || '')) : []
-)
+const creditosOrdenados = computed(() => {
+  if (!cuenta.value) return []
+  const mapa = getEstadosFacturasCuenta(cuenta.value)
+  return [...cuenta.value.creditos]
+    .sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''))
+    .map((c) => ({
+      ...c,
+      info: mapa.get(c.id) || {
+        estado: 'en_plazo' as const,
+        label: 'Pendiente',
+        color: 'var(--status-warning)',
+        icon: 'i-heroicons-clock',
+        diasRestantes: null,
+        fechaVencimiento: c.fechaVencimiento || null,
+        pendienteMonto: c.montoDivisas || 0,
+      },
+    }))
+})
 const abonosOrdenados = computed(() =>
   cuenta.value ? [...cuenta.value.abonos].sort((a, b) => (b.fecha || '').localeCompare(a.fecha || '')) : []
 )
@@ -260,15 +275,15 @@ function eliminarCuenta() {
                 <p class="text-sm font-semibold" style="color: var(--ink-text)">{{ formatDate(c.fecha) }}</p>
                 <!-- Badge de estado y vencimiento para clientes y proveedores -->
                 <span
-                  v-if="getEstadoFactura(c, cuenta).estado !== 'en_plazo' || c.fechaVencimiento"
+                  v-if="c.info.estado !== 'en_plazo' || c.fechaVencimiento"
                   class="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-sm"
                   :style="{
-                    color: getEstadoFactura(c, cuenta).color,
-                    background: `color-mix(in srgb, ${getEstadoFactura(c, cuenta).color} 15%, transparent)`,
+                    color: c.info.color,
+                    background: `color-mix(in srgb, ${c.info.color} 15%, transparent)`,
                   }"
                 >
-                  <UIcon :name="getEstadoFactura(c, cuenta).icon" class="h-3 w-3" />
-                  {{ getEstadoFactura(c, cuenta).label }}
+                  <UIcon :name="c.info.icon" class="h-3 w-3" />
+                  {{ c.info.label }}
                 </span>
               </div>
 
@@ -295,7 +310,7 @@ function eliminarCuenta() {
               </span>
               <!-- Botón de recordatorio de cobro para clientes -->
               <UButton
-                v-if="tipo === 'cliente' && getEstadoFactura(c, cuenta).estado !== 'pagada'"
+                v-if="tipo === 'cliente' && c.info.estado !== 'pagada'"
                 icon="i-heroicons-bell-alert"
                 color="amber"
                 variant="soft"
@@ -307,7 +322,7 @@ function eliminarCuenta() {
               </UButton>
               <!-- Botón directo para registrar cobro de la factura -->
               <UButton
-                v-if="tipo === 'cliente' && getEstadoFactura(c, cuenta).estado !== 'pagada'"
+                v-if="tipo === 'cliente' && c.info.estado !== 'pagada'"
                 icon="i-heroicons-banknotes"
                 color="amber"
                 variant="ghost"
@@ -319,7 +334,7 @@ function eliminarCuenta() {
               </UButton>
               <!-- Botón directo para registrar pago de la factura a proveedor -->
               <UButton
-                v-if="tipo === 'proveedor' && getEstadoFactura(c, cuenta).estado !== 'pagada'"
+                v-if="tipo === 'proveedor' && c.info.estado !== 'pagada'"
                 icon="i-heroicons-banknotes"
                 color="blue"
                 variant="ghost"

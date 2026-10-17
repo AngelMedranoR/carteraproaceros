@@ -41,52 +41,60 @@ export function diffDaysFromToday(dateStr: string | null | undefined): number | 
   return Math.round(diffMs / (1000 * 60 * 60 * 24))
 }
 
+const formatterUSD = new Intl.NumberFormat('es-VE', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
+const formatterBS = new Intl.NumberFormat('es-VE', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
+const formatterTasa = new Intl.NumberFormat('es-VE', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
+})
+
+const formatterCompact = new Intl.NumberFormat('es-VE', {
+  style: 'currency',
+  currency: 'USD',
+  notation: 'compact',
+  maximumFractionDigits: 1,
+})
+
+const formatterDate = new Intl.DateTimeFormat('es-VE', {
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+})
+
 export function useCurrency() {
   const formatDivisas = (value: number | null | undefined) => {
-    const n = value ?? 0
-    return new Intl.NumberFormat('es-VE', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(n)
+    return formatterUSD.format(value ?? 0)
   }
 
   const formatBolivares = (value: number | null | undefined) => {
     if (value === null || value === undefined) return '—'
-    return (
-      new Intl.NumberFormat('es-VE', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }).format(value) + ' Bs.'
-    )
+    return formatterBS.format(value) + ' Bs.'
   }
 
   const formatTasa = (value: number | null | undefined) => {
     if (value === null || value === undefined || value <= 0) return '—'
-    return (
-      new Intl.NumberFormat('es-VE', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 4,
-      }).format(value) + ' Bs/$'
-    )
+    return formatterTasa.format(value) + ' Bs/$'
   }
 
   const formatCompact = (value: number | null | undefined) => {
-    const n = value ?? 0
-    return new Intl.NumberFormat('es-VE', {
-      style: 'currency',
-      currency: 'USD',
-      notation: 'compact',
-      maximumFractionDigits: 1,
-    }).format(n)
+    return formatterCompact.format(value ?? 0)
   }
 
   const formatDate = (value: string | null | undefined) => {
     if (!value) return '—'
     const d = parseLocalDate(value)
     if (!d) return '—'
-    return new Intl.DateTimeFormat('es-VE', { day: '2-digit', month: 'short', year: 'numeric' }).format(d)
+    return formatterDate.format(d)
   }
 
   return {

@@ -8,6 +8,8 @@ function newId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 9)}`
 }
 
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+
 export const useAccountsStore = defineStore('accounts', {
   state: () => ({
     cuentas: [] as Cuenta[],
@@ -26,6 +28,11 @@ export const useAccountsStore = defineStore('accounts', {
       if (this.hydrated) return
       this.hydrated = true
       if (typeof window === 'undefined') return
+
+      window.addEventListener('beforeunload', () => {
+        this.persistImmediate()
+      })
+
       try {
         const raw = window.localStorage.getItem(STORAGE_KEY)
         if (raw) {
@@ -37,17 +44,41 @@ export const useAccountsStore = defineStore('accounts', {
       }
       this.cuentas = crearDatosDemo()
     },
-    persist() {
+    persist(immediate = false) {
       if (typeof window === 'undefined') return
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(this.cuentas))
+      if (immediate) {
+        if (persistTimer) {
+          clearTimeout(persistTimer)
+          persistTimer = null
+        }
+        try {
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(this.cuentas))
+        } catch (e) {
+          console.warn('Error al guardar en localStorage:', e)
+        }
+        return
+      }
+
+      if (persistTimer) clearTimeout(persistTimer)
+      persistTimer = setTimeout(() => {
+        try {
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(this.cuentas))
+        } catch (e) {
+          console.warn('Error al guardar en localStorage:', e)
+        }
+        persistTimer = null
+      }, 250)
+    },
+    persistImmediate() {
+      this.persist(true)
     },
     restaurarDemo() {
       this.cuentas = crearDatosDemo()
-      this.persist()
+      this.persistImmediate()
     },
     vaciarTodo() {
       this.cuentas = []
-      this.persist()
+      this.persistImmediate()
     },
     crearCuenta(nombre: string, tipo: TipoCuenta) {
       const cuenta: Cuenta = { id: newId(tipo === 'cliente' ? 'cli' : 'prov'), nombre, tipo, creditos: [], abonos: [] }
@@ -144,15 +175,15 @@ export const useAccountsStore = defineStore('accounts', {
     },
     reemplazarCuentasDeTipo(tipo: TipoCuenta, cuentas: Cuenta[]) {
       this.cuentas = [...this.cuentas.filter((c) => c.tipo !== tipo), ...cuentas]
-      this.persist()
+      this.persistImmediate()
     },
     aplicarImportacionConsolidada(cuentasConsolidadas: Cuenta[]) {
       this.cuentas = cuentasConsolidadas
-      this.persist()
+      this.persistImmediate()
     },
     reemplazarTodasLasCuentas(cuentas: Cuenta[]) {
       this.cuentas = cuentas
-      this.persist()
+      this.persistImmediate()
     },
     manejarEventoRealtimeCuentas(payload: { eventType: string; new: any; old: any }) {
       const { eventType, new: newRow, old: oldRow } = payload

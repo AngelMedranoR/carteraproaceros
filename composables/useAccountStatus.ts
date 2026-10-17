@@ -15,11 +15,14 @@ export function saldoPendiente(cuenta: Cuenta) {
 }
 
 export function fechaCreditoMasAntiguo(cuenta: Cuenta) {
-  const fechas = cuenta.creditos
-    .map((c) => new Date(c.fecha))
-    .filter((d) => !Number.isNaN(d.getTime()))
-  if (!fechas.length) return null
-  return new Date(Math.min(...fechas.map((d) => d.getTime())))
+  let minFecha: string | null = null
+  for (const c of cuenta.creditos) {
+    if (!c.fecha) continue
+    if (!minFecha || c.fecha < minFecha) {
+      minFecha = c.fecha
+    }
+  }
+  return minFecha ? parseLocalDate(minFecha) : null
 }
 
 export interface InfoEstadoFactura {
@@ -40,121 +43,137 @@ export function calcularVencimientoCredito(credito: Credito): string | null {
   return null
 }
 
-export function getEstadoFactura(credito: Credito, cuenta: Cuenta, diasAlertaParam?: number): InfoEstadoFactura {
+export function getEstadosFacturasCuenta(cuenta: Cuenta, diasAlertaParam?: number): Map<string, InfoEstadoFactura> {
+  const mapa = new Map<string, InfoEstadoFactura>()
+  if (!cuenta.creditos || !cuenta.creditos.length) return mapa
+
   let diasAlerta = diasAlertaParam
   if (diasAlerta === undefined) {
     try {
       const settings = useSettingsStore()
-      diasAlerta = settings.diasAlertaVencimiento ?? 5
+      diasAlerta = cuenta.tipo === 'cliente'
+        ? (settings.diasAlertaCobro ?? settings.diasAlertaVencimiento ?? 5)
+        : (settings.diasAlertaVencimiento ?? 5)
     } catch {
       diasAlerta = 5
     }
   }
 
-  // Ordenar créditos cronológicamente para aplicar FIFO con abonos
+  // Ordenar créditos cronológicamente una sola vez
   const creditosOrdenados = [...cuenta.creditos].sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''))
   let abonosRestantes = totalAbonos(cuenta)
 
-  let pendienteMonto = credito.montoDivisas
   for (const c of creditosOrdenados) {
+    let pendienteMonto = c.montoDivisas
     if (abonosRestantes >= c.montoDivisas) {
       abonosRestantes -= c.montoDivisas
-      if (c.id === credito.id) {
-        pendienteMonto = 0
-        break
-      }
+      pendienteMonto = 0
     } else {
-      if (c.id === credito.id) {
-        pendienteMonto = Math.max(0, c.montoDivisas - abonosRestantes)
-        break
-      }
+      pendienteMonto = Math.max(0, c.montoDivisas - abonosRestantes)
       abonosRestantes = 0
     }
-  }
 
-  if (pendienteMonto <= 0.01) {
-    return {
-      estado: 'pagada',
-      label: 'Saldada',
-      color: 'var(--ink-text-muted)',
-      icon: 'i-heroicons-check-circle',
-      diasRestantes: null,
-      fechaVencimiento: credito.fechaVencimiento || null,
-      pendienteMonto: 0,
+    if (pendienteMonto <= 0.01) {
+      mapa.set(c.id, {
+        estado: 'pagada',
+        label: 'Saldada',
+        color: 'var(--ink-text-muted)',
+        icon: 'i-heroicons-check-circle',
+        diasRestantes: null,
+        fechaVencimiento: c.fechaVencimiento || null,
+        pendienteMonto: 0,
+      })
+      continue
+    }
+
+    const fechaVenc = calcularVencimientoCredito(c)
+    if (!fechaVenc) {
+      mapa.set(c.id, {
+        estado: 'en_plazo',
+        label: 'Pendiente',
+        color: 'var(--status-warning)',
+        icon: 'i-heroicons-clock',
+        diasRestantes: null,
+        fechaVencimiento: null,
+        pendienteMonto,
+      })
+      continue
+    }
+
+    const dias = diffDaysFromToday(fechaVenc)
+    if (dias === null) {
+      mapa.set(c.id, {
+        estado: 'en_plazo',
+        label: 'Pendiente',
+        color: 'var(--status-warning)',
+        icon: 'i-heroicons-clock',
+        diasRestantes: null,
+        fechaVencimiento: fechaVenc,
+        pendienteMonto,
+      })
+      continue
+    }
+
+    if (dias < 0) {
+      const abs = Math.abs(dias)
+      mapa.set(c.id, {
+        estado: 'vencida',
+        label: abs === 1 ? 'Vencida hace 1 día' : `Vencida hace ${abs} días`,
+        color: 'var(--status-critical)',
+        icon: 'i-heroicons-exclamation-triangle',
+        diasRestantes: dias,
+        fechaVencimiento: fechaVenc,
+        pendienteMonto,
+      })
+    } else if (dias === 0) {
+      mapa.set(c.id, {
+        estado: 'por_vencer',
+        label: 'Vence hoy',
+        color: 'var(--status-critical)',
+        icon: 'i-heroicons-clock',
+        diasRestantes: 0,
+        fechaVencimiento: fechaVenc,
+        pendienteMonto,
+      })
+    } else if (dias <= diasAlerta) {
+      mapa.set(c.id, {
+        estado: 'por_vencer',
+        label: dias === 1 ? 'Vence mañana' : `Vence en ${dias} días`,
+        color: 'var(--status-warning)',
+        icon: 'i-heroicons-clock',
+        diasRestantes: dias,
+        fechaVencimiento: fechaVenc,
+        pendienteMonto,
+      })
+    } else {
+      mapa.set(c.id, {
+        estado: 'en_plazo',
+        label: `Vence en ${dias} días`,
+        color: 'var(--status-good)',
+        icon: 'i-heroicons-calendar',
+        diasRestantes: dias,
+        fechaVencimiento: fechaVenc,
+        pendienteMonto,
+      })
     }
   }
 
-  const fechaVenc = calcularVencimientoCredito(credito)
-  if (!fechaVenc) {
-    return {
-      estado: 'en_plazo',
-      label: 'Pendiente',
-      color: 'var(--status-warning)',
-      icon: 'i-heroicons-clock',
-      diasRestantes: null,
-      fechaVencimiento: null,
-      pendienteMonto,
-    }
-  }
+  return mapa
+}
 
-  const dias = diffDaysFromToday(fechaVenc)
-  if (dias === null) {
-    return {
-      estado: 'en_plazo',
-      label: 'Pendiente',
-      color: 'var(--status-warning)',
-      icon: 'i-heroicons-clock',
-      diasRestantes: null,
-      fechaVencimiento: fechaVenc,
-      pendienteMonto,
-    }
-  }
-
-  if (dias < 0) {
-    const abs = Math.abs(dias)
-    return {
-      estado: 'vencida',
-      label: abs === 1 ? 'Vencida hace 1 día' : `Vencida hace ${abs} días`,
-      color: 'var(--status-critical)',
-      icon: 'i-heroicons-exclamation-triangle',
-      diasRestantes: dias,
-      fechaVencimiento: fechaVenc,
-      pendienteMonto,
-    }
-  }
-
-  if (dias === 0) {
-    return {
-      estado: 'por_vencer',
-      label: 'Vence hoy',
-      color: 'var(--status-critical)',
-      icon: 'i-heroicons-clock',
-      diasRestantes: 0,
-      fechaVencimiento: fechaVenc,
-      pendienteMonto,
-    }
-  }
-
-  if (dias <= diasAlerta) {
-    return {
-      estado: 'por_vencer',
-      label: dias === 1 ? 'Vence mañana' : `Vence en ${dias} días`,
-      color: 'var(--status-warning)',
-      icon: 'i-heroicons-clock',
-      diasRestantes: dias,
-      fechaVencimiento: fechaVenc,
-      pendienteMonto,
-    }
-  }
+export function getEstadoFactura(credito: Credito, cuenta: Cuenta, diasAlertaParam?: number): InfoEstadoFactura {
+  const mapa = getEstadosFacturasCuenta(cuenta, diasAlertaParam)
+  const info = mapa.get(credito.id)
+  if (info) return info
 
   return {
     estado: 'en_plazo',
-    label: `Vence en ${dias} días`,
-    color: 'var(--status-good)',
-    icon: 'i-heroicons-calendar',
-    diasRestantes: dias,
-    fechaVencimiento: fechaVenc,
-    pendienteMonto,
+    label: 'Pendiente',
+    color: 'var(--status-warning)',
+    icon: 'i-heroicons-clock',
+    diasRestantes: null,
+    fechaVencimiento: credito.fechaVencimiento || null,
+    pendienteMonto: credito.montoDivisas || 0,
   }
 }
 
@@ -175,10 +194,11 @@ export function obtenerAlertasProveedores(proveedores: Cuenta[], diasAlertaParam
   }[] = []
 
   for (const p of proveedores) {
-    if (p.tipo !== 'proveedor') continue
+    if (p.tipo !== 'proveedor' || !p.creditos.length) continue
+    const mapa = getEstadosFacturasCuenta(p, diasAlerta)
     for (const c of p.creditos) {
-      const info = getEstadoFactura(c, p, diasAlerta)
-      if (info.estado === 'vencida' || info.estado === 'por_vencer') {
+      const info = mapa.get(c.id)
+      if (info && (info.estado === 'vencida' || info.estado === 'por_vencer')) {
         alertas.push({ proveedor: p, credito: c, info })
       }
     }
@@ -204,10 +224,11 @@ export function obtenerRecordatoriosClientes(clientes: Cuenta[], diasAlertaParam
   }[] = []
 
   for (const cl of clientes) {
-    if (cl.tipo !== 'cliente') continue
+    if (cl.tipo !== 'cliente' || !cl.creditos.length) continue
+    const mapa = getEstadosFacturasCuenta(cl, diasAlerta)
     for (const c of cl.creditos) {
-      const info = getEstadoFactura(c, cl, diasAlerta)
-      if (info.estado === 'vencida' || info.estado === 'por_vencer') {
+      const info = mapa.get(c.id)
+      if (info && (info.estado === 'vencida' || info.estado === 'por_vencer')) {
         recordatorios.push({ cliente: cl, credito: c, info })
       }
     }
@@ -262,6 +283,11 @@ export function useAccountStatus() {
 
   return {
     getEstado,
+    getEstadosFacturasCuenta: (cuenta: Cuenta, dias?: number) =>
+      getEstadosFacturasCuenta(
+        cuenta,
+        dias ?? (cuenta.tipo === 'cliente' ? settings.diasAlertaCobro : settings.diasAlertaVencimiento)
+      ),
     getEstadoFactura: (credito: Credito, cuenta: Cuenta, dias?: number) =>
       getEstadoFactura(
         credito,

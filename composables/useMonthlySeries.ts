@@ -1,5 +1,7 @@
 import type { Cuenta } from '~/types'
 
+const formatterMonth = new Intl.DateTimeFormat('es-VE', { month: 'short' })
+
 export function useMonthlySeries(cuentas: Cuenta[], meses = 6) {
   const ahora = new Date()
   const claves: string[] = []
@@ -7,7 +9,7 @@ export function useMonthlySeries(cuentas: Cuenta[], meses = 6) {
   for (let i = meses - 1; i >= 0; i--) {
     const d = new Date(ahora.getFullYear(), ahora.getMonth() - i, 1)
     claves.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
-    etiquetas.push(new Intl.DateTimeFormat('es-VE', { month: 'short' }).format(d))
+    etiquetas.push(formatterMonth.format(d))
   }
 
   const creditosPorMes = new Map(claves.map((k) => [k, 0]))
