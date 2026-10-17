@@ -334,48 +334,65 @@ function toNumber(v: unknown): number | null {
   return null
 }
 
-function toIsoDate(v: unknown): string | null {
+function sanitizeYear(y: number): number {
+  if (y >= 1990 && y <= 2099) return y
+  const yStr = String(y)
+  if (yStr.includes('2026') || yStr.includes('26')) return 2026
+  if (yStr.length === 5 && yStr.startsWith('2')) return 2026
+  if (y >= 20000 && y <= 29999) return 2026
+  if (y >= 2100 && y <= 2999) return 2026
+  return 2026
+}
+
+export function toIsoDate(v: unknown): string | null {
   if (v === null || v === undefined) return null
+  let y: number, m: number, d: number
+
   if (v instanceof Date) {
     if (Number.isNaN(v.getTime())) return null
-    const y = v.getFullYear()
-    const m = String(v.getMonth() + 1).padStart(2, '0')
-    const d = String(v.getDate()).padStart(2, '0')
-    return `${y}-${m}-${d}`
-  }
-  if (typeof v === 'number' && v > 20000 && v < 65000) {
+    y = sanitizeYear(v.getFullYear())
+    m = v.getMonth() + 1
+    d = v.getDate()
+  } else if (typeof v === 'number' && v > 20000 && v < 65000) {
     const excelEpoch = new Date(Date.UTC(1899, 11, 30))
     const millis = excelEpoch.getTime() + Math.round(v * 86400 * 1000)
-    const d = new Date(millis)
-    if (!Number.isNaN(d.getTime())) {
-      const y = d.getUTCFullYear()
-      const m = String(d.getUTCMonth() + 1).padStart(2, '0')
-      const day = String(d.getUTCDate()).padStart(2, '0')
-      return `${y}-${m}-${day}`
-    }
-  }
-  if (typeof v === 'string') {
+    const dt = new Date(millis)
+    if (Number.isNaN(dt.getTime())) return null
+    y = sanitizeYear(dt.getUTCFullYear())
+    m = dt.getUTCMonth() + 1
+    d = dt.getUTCDate()
+  } else if (typeof v === 'string') {
     const t = v.trim()
     if (!t || t === ' ') return null
-    const match = t.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/)
-    if (match) {
-      return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`
+    const isoMatch = t.match(/^(\d{4,5})[-\/](\d{1,2})[-\/](\d{1,2})/)
+    const dmyMatch = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4,5})/)
+    if (isoMatch) {
+      y = sanitizeYear(parseInt(isoMatch[1], 10))
+      m = parseInt(isoMatch[2], 10)
+      d = parseInt(isoMatch[3], 10)
+    } else if (dmyMatch) {
+      d = parseInt(dmyMatch[1], 10)
+      m = parseInt(dmyMatch[2], 10)
+      y = sanitizeYear(parseInt(dmyMatch[3], 10))
+    } else {
+      const dt = new Date(t)
+      if (Number.isNaN(dt.getTime())) return null
+      y = sanitizeYear(dt.getFullYear())
+      m = dt.getMonth() + 1
+      d = dt.getDate()
     }
-    const dmy = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/)
-    if (dmy) {
-      const day = dmy[1].padStart(2, '0')
-      const month = dmy[2].padStart(2, '0')
-      const year = dmy[3]
-      return `${year}-${month}-${day}`
-    }
-    const d = new Date(t)
-    if (Number.isNaN(d.getTime())) return null
-    const y = d.getFullYear()
-    const m = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
-    return `${y}-${m}-${day}`
+  } else {
+    return null
   }
-  return null
+
+  if (m > 12 && d <= 12 && m <= 31) {
+    const temp = m
+    m = d
+    d = temp
+  }
+
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
 }
 
 interface MovimientosHoja {
@@ -653,7 +670,7 @@ function parseHojaMovimientos(rows: unknown[][]): MovimientosHoja | null {
     const montoCrBs = mapping.montoCrBolivares >= 0 ? toNumber(row[mapping.montoCrBolivares]) : null
     const montoCrDiv = mapping.montoCrDivisas >= 0 ? toNumber(row[mapping.montoCrDivisas]) : null
 
-    const fechaAb = mapping.fechaAb >= 0 ? toIsoDate(row[mapping.fechaAb]) : (fechaCr || null)
+    const fechaAb = (mapping.fechaAb >= 0 ? toIsoDate(row[mapping.fechaAb]) : null) || fechaCr || null
     const montoAbBs = mapping.montoAbBolivares >= 0 ? toNumber(row[mapping.montoAbBolivares]) : null
     const montoAbDiv = mapping.montoAbDivisas >= 0 ? toNumber(row[mapping.montoAbDivisas]) : null
     const comAb = mapping.comentarioAb >= 0 ? cleanText(row[mapping.comentarioAb]) : ''

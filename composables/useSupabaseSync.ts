@@ -117,36 +117,135 @@ alter table public.creditos replica identity full;
 alter table public.abonos replica identity full;
 `
 
+function sanitizeYear(y: number): number {
+  if (y >= 1990 && y <= 2099) return y
+  const yStr = String(y)
+  if (yStr.includes('2026') || yStr.includes('26')) return 2026
+  if (yStr.length === 5 && yStr.startsWith('2')) return 2026
+  if (y >= 20000 && y <= 29999) return 2026
+  if (y >= 2100 && y <= 2999) return 2026
+  return 2026
+}
+
 export function sanitizeDate(v: unknown): string | null {
   if (v === null || v === undefined) return null
+  let y: number, m: number, d: number
+
   if (v instanceof Date) {
     if (Number.isNaN(v.getTime())) return null
-    const y = v.getFullYear()
-    const m = String(v.getMonth() + 1).padStart(2, '0')
-    const d = String(v.getDate()).padStart(2, '0')
-    return `${y}-${m}-${d}`
-  }
-  if (typeof v === 'string') {
+    y = sanitizeYear(v.getFullYear())
+    m = v.getMonth() + 1
+    d = v.getDate()
+  } else if (typeof v === 'number' && v > 20000 && v < 65000) {
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30))
+    const millis = excelEpoch.getTime() + Math.round(v * 86400 * 1000)
+    const dt = new Date(millis)
+    if (Number.isNaN(dt.getTime())) return null
+    y = sanitizeYear(dt.getUTCFullYear())
+    m = dt.getUTCMonth() + 1
+    d = dt.getUTCDate()
+  } else if (typeof v === 'string') {
     const t = v.trim()
     if (!t || t === ' ') return null
-    const isoMatch = t.match(/^(\d{4})-(\d{2})-(\d{2})/)
-    if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`
-    const dmyMatch = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/)
-    if (dmyMatch) {
-      const d = dmyMatch[1].padStart(2, '0')
-      const m = dmyMatch[2].padStart(2, '0')
-      const y = dmyMatch[3]
-      return `${y}-${m}-${d}`
+    const isoMatch = t.match(/^(\d{4,5})[-\/](\d{1,2})[-\/](\d{1,2})/)
+    const dmyMatch = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,5})/)
+    if (isoMatch) {
+      y = sanitizeYear(parseInt(isoMatch[1], 10))
+      m = parseInt(isoMatch[2], 10)
+      d = parseInt(isoMatch[3], 10)
+    } else if (dmyMatch) {
+      d = parseInt(dmyMatch[1], 10)
+      m = parseInt(dmyMatch[2], 10)
+      let rawYear = parseInt(dmyMatch[3], 10)
+      if (rawYear < 100) rawYear += 2000
+      y = sanitizeYear(rawYear)
+    } else {
+      const dt = new Date(t)
+      if (Number.isNaN(dt.getTime())) return null
+      y = sanitizeYear(dt.getFullYear())
+      m = dt.getMonth() + 1
+      d = dt.getDate()
     }
-    const d = new Date(t)
-    if (!Number.isNaN(d.getTime())) {
-      const y = d.getFullYear()
-      const m = String(d.getMonth() + 1).padStart(2, '0')
-      const day = String(d.getDate()).padStart(2, '0')
-      return `${y}-${m}-${day}`
+  } else {
+    return null
+  }
+
+  // Si mes > 12 y día <= 12, intercambiar mes y día (ej. 2026-28-04 o 04/28/2026)
+  if (m > 12 && d <= 12 && m <= 31) {
+    const temp = m
+    m = d
+    d = temp
+  }
+
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
+
+async function fetchAllRows(
+  client: SupabaseClient,
+  table: string,
+  orderCol = 'id'
+): Promise<any[]> {
+  const allRows: any[] = []
+  const pageSize = 1000
+  let from = 0
+  let keepGoing = true
+
+  while (keepGoing) {
+    const to = from + pageSize - 1
+    const { data, error } = await client
+      .from(table)
+      .select('*')
+      .order(orderCol, { ascending: true })
+      .range(from, to)
+
+    if (error) throw error
+
+    if (!data || data.length === 0) {
+      keepGoing = false
+    } else {
+      allRows.push(...data)
+      if (data.length < pageSize) {
+        keepGoing = false
+      } else {
+        from += pageSize
+      }
     }
   }
-  return null
+
+  return allRows
+}
+
+async function upsertInBatches(
+  client: SupabaseClient,
+  table: string,
+  rows: any[],
+  chunkSize = 100
+): Promise<{ inserted: number; errors: string[] }> {
+  let inserted = 0
+  const errors: string[] = []
+  if (rows.length === 0) return { inserted, errors }
+
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize)
+    const { error } = await client.from(table).upsert(chunk, { onConflict: 'id' })
+    if (!error) {
+      inserted += chunk.length
+    } else {
+      console.warn(`Lote de ${chunk.length} filas en ${table} falló (${error.message}). Reintentando fila por fila...`)
+      for (const row of chunk) {
+        const { error: singleErr } = await client.from(table).upsert(row, { onConflict: 'id' })
+        if (!singleErr) {
+          inserted++
+        } else {
+          console.error(`Error en fila individual de ${table} [${row.id}]:`, singleErr.message, row)
+          errors.push(`${table} [${row.id}]: ${singleErr.message}`)
+        }
+      }
+    }
+  }
+
+  return { inserted, errors }
 }
 
 export function useSupabaseSync() {
@@ -318,32 +417,12 @@ export function useSupabaseSync() {
         }
       }
 
-      // Upsert en orden relacional con procesamiento por lotes (chunks de 100)
-      const chunkSize = 100
+      // Upsert en orden relacional con procesamiento resiliente por lotes
+      const resCuentas = await upsertInBatches(client, 'cuentas', cuentasRows)
+      const resCreditos = await upsertInBatches(client, 'creditos', creditosRows)
+      const resAbonos = await upsertInBatches(client, 'abonos', abonosRows)
 
-      if (cuentasRows.length > 0) {
-        for (let i = 0; i < cuentasRows.length; i += chunkSize) {
-          const chunk = cuentasRows.slice(i, i + chunkSize)
-          const { error: errCuentas } = await client.from('cuentas').upsert(chunk, { onConflict: 'id' })
-          if (errCuentas) throw errCuentas
-        }
-      }
-
-      if (creditosRows.length > 0) {
-        for (let i = 0; i < creditosRows.length; i += chunkSize) {
-          const chunk = creditosRows.slice(i, i + chunkSize)
-          const { error: errCreditos } = await client.from('creditos').upsert(chunk, { onConflict: 'id' })
-          if (errCreditos) throw errCreditos
-        }
-      }
-
-      if (abonosRows.length > 0) {
-        for (let i = 0; i < abonosRows.length; i += chunkSize) {
-          const chunk = abonosRows.slice(i, i + chunkSize)
-          const { error: errAbonos } = await client.from('abonos').upsert(chunk, { onConflict: 'id' })
-          if (errAbonos) throw errAbonos
-        }
-      }
+      const totalErrors = [...resCuentas.errors, ...resCreditos.errors, ...resAbonos.errors]
 
       settings.setSyncStatus('success')
       settings.lastSyncAt = new Date().toISOString()
@@ -354,10 +433,10 @@ export function useSupabaseSync() {
 
       return {
         ok: true,
-        mensaje: `Respaldo exitoso: ${cuentasRows.length} cuentas, ${creditosRows.length} facturas y ${abonosRows.length} abonos subidos a la nube.`,
-        cuentasCount: cuentasRows.length,
-        creditosCount: creditosRows.length,
-        abonosCount: abonosRows.length,
+        mensaje: `Respaldo exitoso: ${resCuentas.inserted} cuentas, ${resCreditos.inserted} facturas y ${resAbonos.inserted} abonos subidos a la nube.${totalErrors.length > 0 ? ` (${totalErrors.length} filas omitidas por conflicto)` : ''}`,
+        cuentasCount: resCuentas.inserted,
+        creditosCount: resCreditos.inserted,
+        abonosCount: resAbonos.inserted,
       }
     } catch (err: any) {
       console.error('Error al subir a Supabase:', err)
@@ -423,31 +502,11 @@ export function useSupabaseSync() {
         comentario: ab.comentario || '',
       }))
 
-      const chunkSize = 100
+      const resCuentas = await upsertInBatches(client, 'cuentas', cuentasRows)
+      const resCreditos = await upsertInBatches(client, 'creditos', creditosRows)
+      const resAbonos = await upsertInBatches(client, 'abonos', abonosRows)
 
-      if (cuentasRows.length > 0) {
-        for (let i = 0; i < cuentasRows.length; i += chunkSize) {
-          const chunk = cuentasRows.slice(i, i + chunkSize)
-          const { error } = await client.from('cuentas').upsert(chunk, { onConflict: 'id' })
-          if (error) throw error
-        }
-      }
-
-      if (creditosRows.length > 0) {
-        for (let i = 0; i < creditosRows.length; i += chunkSize) {
-          const chunk = creditosRows.slice(i, i + chunkSize)
-          const { error } = await client.from('creditos').upsert(chunk, { onConflict: 'id' })
-          if (error) throw error
-        }
-      }
-
-      if (abonosRows.length > 0) {
-        for (let i = 0; i < abonosRows.length; i += chunkSize) {
-          const chunk = abonosRows.slice(i, i + chunkSize)
-          const { error } = await client.from('abonos').upsert(chunk, { onConflict: 'id' })
-          if (error) throw error
-        }
-      }
+      const totalErrors = [...resCuentas.errors, ...resCreditos.errors, ...resAbonos.errors]
 
       settings.lastSyncAt = new Date().toISOString()
       settings.persist()
@@ -457,10 +516,10 @@ export function useSupabaseSync() {
 
       return {
         ok: true,
-        mensaje: `Sincronizados en la nube: ${cuentasRows.length} cuentas, ${creditosRows.length} facturas y ${abonosRows.length} abonos.`,
-        cuentasCount: cuentasRows.length,
-        creditosCount: creditosRows.length,
-        abonosCount: abonosRows.length,
+        mensaje: `Sincronizados en la nube: ${resCuentas.inserted} cuentas, ${resCreditos.inserted} facturas y ${resAbonos.inserted} abonos.${totalErrors.length > 0 ? ` (${totalErrors.length} filas omitidas por conflicto)` : ''}`,
+        cuentasCount: resCuentas.inserted,
+        creditosCount: resCreditos.inserted,
+        abonosCount: resAbonos.inserted,
       }
     } catch (err: any) {
       console.error('Error al sincronizar lote en Supabase:', err)
@@ -475,19 +534,11 @@ export function useSupabaseSync() {
       const client = await getClient()
       if (!client) throw new Error('Supabase no está configurado.')
 
-      const [resCuentas, resCreditos, resAbonos] = await Promise.all([
-        client.from('cuentas').select('*').order('nombre'),
-        client.from('creditos').select('*').order('fecha'),
-        client.from('abonos').select('*').order('fecha'),
+      const [rawCuentas, rawCreditos, rawAbonos] = await Promise.all([
+        fetchAllRows(client, 'cuentas', 'id'),
+        fetchAllRows(client, 'creditos', 'id'),
+        fetchAllRows(client, 'abonos', 'id'),
       ])
-
-      if (resCuentas.error) throw resCuentas.error
-      if (resCreditos.error) throw resCreditos.error
-      if (resAbonos.error) throw resAbonos.error
-
-      const rawCuentas = resCuentas.data || []
-      const rawCreditos = resCreditos.data || []
-      const rawAbonos = resAbonos.data || []
 
       // Reconstruir estructura de datos de Cartera 360
       const cuentasReconstruidas: Cuenta[] = rawCuentas.map((c) => {

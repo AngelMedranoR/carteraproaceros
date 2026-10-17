@@ -33,6 +33,15 @@ onMounted(async () => {
       icon: 'i-heroicons-bolt',
     })
   }
+
+  // En teléfonos móviles y navegadores: al volver a la pestaña tras estar en segundo plano
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        sync.solicitarReconciliacionDebounced()
+      }
+    })
+  }
 })
 </script>
 

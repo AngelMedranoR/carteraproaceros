@@ -21,6 +21,11 @@ const cuentasActuales = computed(() =>
 const etiqueta = props.tipo === 'cliente' ? 'clientes' : 'proveedores'
 const etiquetaSingular = props.tipo === 'cliente' ? 'cliente' : 'proveedor'
 
+onMounted(() => {
+  store.hydrate()
+  settingsStore.hydrate()
+})
+
 function abrirSelector() {
   fileInput.value?.click()
 }
@@ -69,13 +74,21 @@ async function confirmarImportacion() {
   const info = pendiente.value
 
   try {
+    settingsStore.hydrate()
+    store.hydrate()
+
     // 1. Guardar estado consolidado en Pinia y localStorage
     store.aplicarImportacionConsolidada(info.cuentasConsolidadas)
 
-    // 2. Si Supabase está conectado, guardar directamente en la base de datos en la nube
+    // 2. Si no estaba marcado como conectado pero hay credenciales, probar conexión
+    if (!settingsStore.connected) {
+      await sync.probarConexion()
+    }
+
+    // 3. Si Supabase está conectado, guardar directamente en la base de datos en la nube
     let enNube = false
+    let resumenNube = ''
     if (settingsStore.connected && settingsStore.tablesReady) {
-      // Tomamos todas las cuentas del tipo actual y sus créditos/abonos consolidados
       const cuentasParaUpsert = info.cuentasConsolidadas.filter((c) => c.tipo === props.tipo)
       const todosLosCreditos: Array<{ cuentaId: string; credito: any }> = []
       const todosLosAbonos: Array<{ cuentaId: string; abono: any }> = []
@@ -97,6 +110,7 @@ async function confirmarImportacion() {
 
       if (resDb.ok) {
         enNube = true
+        resumenNube = resDb.mensaje
       } else {
         toast.add({
           title: 'Error al sincronizar con la nube',
@@ -110,7 +124,9 @@ async function confirmarImportacion() {
     const { estadisticas } = info
     toast.add({
       title: enNube ? 'Sincronizado con la base de datos' : `${estadisticas.cuentasTotal} ${etiqueta} importados`,
-      description: `${estadisticas.cuentasTotal} ${etiqueta} procesados (${estadisticas.creditosNuevos} facturas y ${estadisticas.abonosNuevos} abonos agregados, ${estadisticas.creditosExistentesOmitidos + estadisticas.abonosExistentesOmitidos} omitidos por ya existir).${enNube ? ' Disponible en tiempo real en tu PC y teléfono.' : ''}`,
+      description: enNube
+        ? `${resumenNube} Disponible en tiempo real en tu PC y teléfono.`
+        : `${estadisticas.cuentasTotal} ${etiqueta} procesados (${estadisticas.creditosNuevos} facturas y ${estadisticas.abonosNuevos} abonos agregados, ${estadisticas.creditosExistentesOmitidos + estadisticas.abonosExistentesOmitidos} omitidos por ya existir).`,
       icon: enNube ? 'i-heroicons-cloud-arrow-up' : 'i-heroicons-check-circle',
       color: 'green',
     })
