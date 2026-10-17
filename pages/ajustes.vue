@@ -678,7 +678,7 @@ function guardarAlertas() {
             <ol class="list-decimal list-inside space-y-1" style="color: var(--ink-text-muted)">
               <li>Abre la app de <strong>Cámara</strong> en tu teléfono.</li>
               <li>Apunta hacia el código QR de arriba.</li>
-              <li>Toca el enlace emergente para abrir Cartera 360.</li>
+              <li>Toca el enlace emergente para abrir Cartera Proaceros.</li>
               <li>¡Listo! Tu teléfono quedará conectado y sincronizado en vivo.</li>
             </ol>
           </div>

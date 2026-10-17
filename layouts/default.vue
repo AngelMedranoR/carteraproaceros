@@ -28,7 +28,7 @@ onMounted(async () => {
   if (vinculado) {
     toast.add({
       title: '¡Dispositivo vinculado con éxito!',
-      description: 'Conectado a la base de datos de Cartera 360 en tiempo real.',
+      description: 'Conectado a la base de datos de Cartera Proaceros en tiempo real.',
       color: 'green',
       icon: 'i-heroicons-bolt',
     })
@@ -41,6 +41,31 @@ onMounted(async () => {
         sync.solicitarReconciliacionDebounced()
       }
     })
+
+    // Eliminar badge o drawer inyectado por Netlify en la parte inferior
+    const limpiarNetlifyBadge = () => {
+      const selectores = [
+        '#netlify-drawer',
+        '[data-netlify-drawer]',
+        '.netlify-drawer-container',
+        'iframe[id*="netlify-drawer"]',
+        'iframe[src*="netlify"]',
+        'a[href*="netlify.com"]',
+      ]
+      selectores.forEach((sel) => {
+        document.querySelectorAll(sel).forEach((el) => {
+          if (el.parentElement && el.parentElement.tagName === 'DIV' && el.parentElement.children.length === 1) {
+            el.parentElement.remove()
+          } else {
+            el.remove()
+          }
+        })
+      })
+    }
+    limpiarNetlifyBadge()
+    setTimeout(limpiarNetlifyBadge, 500)
+    setTimeout(limpiarNetlifyBadge, 1500)
+    setTimeout(limpiarNetlifyBadge, 3000)
   }
 })
 </script>
@@ -53,9 +78,11 @@ onMounted(async () => {
       style="border-color: var(--ink-border)"
     >
       <div class="px-6 py-7">
-        <NuxtLink to="/" class="flex items-baseline gap-2">
+        <NuxtLink to="/" class="flex items-baseline gap-1.5">
           <span class="font-display text-2xl tracking-tight" style="color: var(--ink-text)">Cartera</span>
-          <span class="font-display text-2xl italic" style="color: var(--cobrar)">360</span>
+          <span class="font-display text-2xl tracking-tight">
+            <span class="font-bold text-red-600 dark:text-red-500">Pro</span><span style="color: var(--ink-text)">aceros</span>
+          </span>
         </NuxtLink>
         <p class="mt-1 text-xs uppercase tracking-[0.18em]" style="color: var(--ink-text-muted)">
           Cobranzas &amp; pagos
@@ -162,9 +189,11 @@ onMounted(async () => {
         class="lg:hidden flex items-center justify-between px-4 py-3.5 border-b sticky top-0 z-30 backdrop-blur"
         style="border-color: var(--ink-border); background: var(--ink-bg)"
       >
-        <NuxtLink to="/" class="flex items-baseline gap-1.5">
-          <span class="font-display text-lg" style="color: var(--ink-text)">Cartera</span>
-          <span class="font-display text-lg italic" style="color: var(--cobrar)">360</span>
+        <NuxtLink to="/" class="flex items-baseline gap-1">
+          <span class="font-display text-lg tracking-tight" style="color: var(--ink-text)">Cartera</span>
+          <span class="font-display text-lg tracking-tight">
+            <span class="font-bold text-red-600 dark:text-red-500">Pro</span><span style="color: var(--ink-text)">aceros</span>
+          </span>
         </NuxtLink>
         <div class="flex items-center gap-2">
           <NuxtLink

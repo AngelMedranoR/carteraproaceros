@@ -12,14 +12,14 @@ export default defineNuxtConfig({
   },
   app: {
     head: {
-      title: 'Cartera 360 · Cuentas por Cobrar y Pagar',
+      title: 'Cartera Proaceros · Cuentas por Cobrar y Pagar',
       htmlAttrs: { lang: 'es' },
       meta: [
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
         {
           name: 'description',
           content:
-            'Cartera 360: panel administrativo para gestionar cuentas por cobrar y pagar, créditos y abonos.',
+            'Cartera Proaceros: panel administrativo para gestionar cuentas por cobrar y pagar, créditos y abonos.',
         },
       ],
       link: [
