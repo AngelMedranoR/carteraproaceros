@@ -26,7 +26,7 @@ create table if not exists public.cuentas (
 create table if not exists public.creditos (
   id text primary key,
   cuenta_id text not null references public.cuentas(id) on delete cascade,
-  fecha date not null,
+  fecha date,
   numero_factura text default '' not null,
   monto_bolivares numeric,
   monto_divisas numeric not null default 0,
@@ -41,13 +41,17 @@ create table if not exists public.creditos (
 create table if not exists public.abonos (
   id text primary key,
   cuenta_id text not null references public.cuentas(id) on delete cascade,
-  fecha date not null,
+  fecha date,
   monto_bolivares numeric,
   monto_divisas numeric not null default 0,
   tasa_cambio numeric,
   comentario text default '' not null,
   created_at timestamptz default now() not null
 );
+
+-- Actualizar tablas existentes para permitir registros sin fecha de planillas Excel
+alter table public.creditos alter column fecha drop not null;
+alter table public.abonos alter column fecha drop not null;
 
 -- 4. Índices para acelerar consultas y ordenamiento
 create index if not exists idx_creditos_cuenta_id on public.creditos(cuenta_id);
@@ -113,6 +117,38 @@ alter table public.creditos replica identity full;
 alter table public.abonos replica identity full;
 `
 
+export function sanitizeDate(v: unknown): string | null {
+  if (v === null || v === undefined) return null
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return null
+    const y = v.getFullYear()
+    const m = String(v.getMonth() + 1).padStart(2, '0')
+    const d = String(v.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
+  }
+  if (typeof v === 'string') {
+    const t = v.trim()
+    if (!t || t === ' ') return null
+    const isoMatch = t.match(/^(\d{4})-(\d{2})-(\d{2})/)
+    if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`
+    const dmyMatch = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/)
+    if (dmyMatch) {
+      const d = dmyMatch[1].padStart(2, '0')
+      const m = dmyMatch[2].padStart(2, '0')
+      const y = dmyMatch[3]
+      return `${y}-${m}-${d}`
+    }
+    const d = new Date(t)
+    if (!Number.isNaN(d.getTime())) {
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      return `${y}-${m}-${day}`
+    }
+  }
+  return null
+}
+
 export function useSupabaseSync() {
   const settings = useSettingsStore()
   const accountsStore = useAccountsStore()
@@ -162,21 +198,26 @@ export function useSupabaseSync() {
         // Ignorar si no hay sesión activa, solo verificar que responde
       }
 
-      // 2. Verificar si las tablas del esquema existen
-      const { error: cuentasErr } = await client.from('cuentas').select('id').limit(1)
+      // 2. Verificar si las tablas del esquema existen y son accesibles
+      const [resCuentas, resCreditos, resAbonos] = await Promise.all([
+        client.from('cuentas').select('id').limit(1),
+        client.from('creditos').select('id').limit(1),
+        client.from('abonos').select('id').limit(1),
+      ])
 
-      if (cuentasErr) {
+      const errTablas = resCuentas.error || resCreditos.error || resAbonos.error
+      if (errTablas) {
         // Código 42P01 indica "relation does not exist" en Postgres
         const faltanTablas =
-          cuentasErr.code === '42P01' ||
-          cuentasErr.message.toLowerCase().includes('does not exist') ||
-          cuentasErr.message.toLowerCase().includes('not found')
+          errTablas.code === '42P01' ||
+          errTablas.message.toLowerCase().includes('does not exist') ||
+          errTablas.message.toLowerCase().includes('not found')
 
         if (faltanTablas) {
           settings.connected = true
           settings.tablesReady = false
           settings.lastCheckedAt = new Date().toISOString()
-          settings.lastError = 'Conexión exitosa, pero las tablas aún no existen. Ejecuta el script SQL en Supabase.'
+          settings.lastError = 'Conexión exitosa, pero faltan tablas en Supabase. Ejecuta el script SQL en Supabase.'
           settings.persist()
           return {
             ok: true,
@@ -185,7 +226,7 @@ export function useSupabaseSync() {
           }
         }
 
-        throw new Error(cuentasErr.message)
+        throw new Error(errTablas.message)
       }
 
       // Tablas disponibles y conexión 100% operativa
@@ -205,7 +246,7 @@ export function useSupabaseSync() {
       settings.tablesReady = false
       settings.lastError = err?.message || 'Error al conectar con Supabase. Revisa la URL y la Anon Key.'
       settings.persist()
-      return { ok: false, tablesReady: false, mensaje: settings.lastError }
+      return { ok: false, mensaje: settings.lastError, tablesReady: false }
     }
   }
 
@@ -227,36 +268,51 @@ export function useSupabaseSync() {
         updated_at: new Date().toISOString(),
       }))
 
-      // Mapear Créditos
+      // Mapear Créditos con fechas saneadas
       const creditosRows: any[] = []
       for (const c of cuentas) {
         for (const cr of c.creditos) {
           creditosRows.push({
             id: cr.id,
             cuenta_id: c.id,
-            fecha: cr.fecha,
+            fecha: sanitizeDate(cr.fecha) || getTodayDateString(),
             numero_factura: cr.numeroFactura || '',
-            monto_bolivares: cr.montoBolivares,
-            monto_divisas: cr.montoDivisas,
-            tasa_cambio: cr.tasaCambio ?? null,
-            fecha_vencimiento: cr.fechaVencimiento ?? null,
-            dias_credito: cr.diasCredito ?? null,
+            monto_bolivares:
+              cr.montoBolivares !== null && !isNaN(Number(cr.montoBolivares))
+                ? Number(cr.montoBolivares)
+                : null,
+            monto_divisas: Number(cr.montoDivisas) || 0,
+            tasa_cambio:
+              cr.tasaCambio !== null && !isNaN(Number(cr.tasaCambio))
+                ? Number(cr.tasaCambio)
+                : null,
+            fecha_vencimiento: sanitizeDate(cr.fechaVencimiento),
+            dias_credito:
+              cr.diasCredito !== null && !isNaN(Number(cr.diasCredito))
+                ? Math.round(Number(cr.diasCredito))
+                : null,
             descripcion: cr.descripcion ?? '',
           })
         }
       }
 
-      // Mapear Abonos
+      // Mapear Abonos con fechas saneadas
       const abonosRows: any[] = []
       for (const c of cuentas) {
         for (const ab of c.abonos) {
           abonosRows.push({
             id: ab.id,
             cuenta_id: c.id,
-            fecha: ab.fecha,
-            monto_bolivares: ab.montoBolivares,
-            monto_divisas: ab.montoDivisas,
-            tasa_cambio: ab.tasaCambio ?? null,
+            fecha: sanitizeDate(ab.fecha) || getTodayDateString(),
+            monto_bolivares:
+              ab.montoBolivares !== null && !isNaN(Number(ab.montoBolivares))
+                ? Number(ab.montoBolivares)
+                : null,
+            monto_divisas: Number(ab.montoDivisas) || 0,
+            tasa_cambio:
+              ab.tasaCambio !== null && !isNaN(Number(ab.tasaCambio))
+                ? Number(ab.tasaCambio)
+                : null,
             comentario: ab.comentario || '',
           })
         }
@@ -304,8 +360,9 @@ export function useSupabaseSync() {
         abonosCount: abonosRows.length,
       }
     } catch (err: any) {
+      console.error('Error al subir a Supabase:', err)
       settings.setSyncStatus('error')
-      const msg = err?.message || 'Error al subir los datos a Supabase.'
+      const msg = err?.message || err?.details || 'Error al subir los datos a Supabase.'
       settings.lastError = msg
       settings.persist()
       return { ok: false, mensaje: msg, error: msg }
@@ -331,23 +388,38 @@ export function useSupabaseSync() {
       const creditosRows = datos.creditos.map(({ cuentaId, credito: cr }) => ({
         id: cr.id,
         cuenta_id: cuentaId,
-        fecha: cr.fecha,
+        fecha: sanitizeDate(cr.fecha) || getTodayDateString(),
         numero_factura: cr.numeroFactura || '',
-        monto_bolivares: cr.montoBolivares,
-        monto_divisas: cr.montoDivisas,
-        tasa_cambio: cr.tasaCambio ?? null,
-        fecha_vencimiento: cr.fechaVencimiento ?? null,
-        dias_credito: cr.diasCredito ?? null,
+        monto_bolivares:
+          cr.montoBolivares !== null && !isNaN(Number(cr.montoBolivares))
+            ? Number(cr.montoBolivares)
+            : null,
+        monto_divisas: Number(cr.montoDivisas) || 0,
+        tasa_cambio:
+          cr.tasaCambio !== null && !isNaN(Number(cr.tasaCambio))
+            ? Number(cr.tasaCambio)
+            : null,
+        fecha_vencimiento: sanitizeDate(cr.fechaVencimiento),
+        dias_credito:
+          cr.diasCredito !== null && !isNaN(Number(cr.diasCredito))
+            ? Math.round(Number(cr.diasCredito))
+            : null,
         descripcion: cr.descripcion ?? '',
       }))
 
       const abonosRows = datos.abonos.map(({ cuentaId, abono: ab }) => ({
         id: ab.id,
         cuenta_id: cuentaId,
-        fecha: ab.fecha,
-        monto_bolivares: ab.montoBolivares,
-        monto_divisas: ab.montoDivisas,
-        tasa_cambio: ab.tasaCambio ?? null,
+        fecha: sanitizeDate(ab.fecha) || getTodayDateString(),
+        monto_bolivares:
+          ab.montoBolivares !== null && !isNaN(Number(ab.montoBolivares))
+            ? Number(ab.montoBolivares)
+            : null,
+        monto_divisas: Number(ab.montoDivisas) || 0,
+        tasa_cambio:
+          ab.tasaCambio !== null && !isNaN(Number(ab.tasaCambio))
+            ? Number(ab.tasaCambio)
+            : null,
         comentario: ab.comentario || '',
       }))
 
@@ -391,7 +463,8 @@ export function useSupabaseSync() {
         abonosCount: abonosRows.length,
       }
     } catch (err: any) {
-      const msg = err?.message || 'Error al guardar el lote en Supabase.'
+      console.error('Error al sincronizar lote en Supabase:', err)
+      const msg = err?.message || err?.details || 'Error al guardar el lote en Supabase.'
       return { ok: false, mensaje: msg, error: msg }
     }
   }
@@ -528,13 +601,22 @@ export function useSupabaseSync() {
         {
           id: credito.id,
           cuenta_id: cuentaId,
-          fecha: credito.fecha,
+          fecha: sanitizeDate(credito.fecha) || getTodayDateString(),
           numero_factura: credito.numeroFactura || '',
-          monto_bolivares: credito.montoBolivares,
-          monto_divisas: credito.montoDivisas,
-          tasa_cambio: credito.tasaCambio ?? null,
-          fecha_vencimiento: credito.fechaVencimiento ?? null,
-          dias_credito: credito.diasCredito ?? null,
+          monto_bolivares:
+            credito.montoBolivares !== null && !isNaN(Number(credito.montoBolivares))
+              ? Number(credito.montoBolivares)
+              : null,
+          monto_divisas: Number(credito.montoDivisas) || 0,
+          tasa_cambio:
+            credito.tasaCambio !== null && !isNaN(Number(credito.tasaCambio))
+              ? Number(credito.tasaCambio)
+              : null,
+          fecha_vencimiento: sanitizeDate(credito.fechaVencimiento),
+          dias_credito:
+            credito.diasCredito !== null && !isNaN(Number(credito.diasCredito))
+              ? Math.round(Number(credito.diasCredito))
+              : null,
           descripcion: credito.descripcion ?? '',
         },
         { onConflict: 'id' }
@@ -564,10 +646,16 @@ export function useSupabaseSync() {
         {
           id: abono.id,
           cuenta_id: cuentaId,
-          fecha: abono.fecha,
-          monto_bolivares: abono.montoBolivares,
-          monto_divisas: abono.montoDivisas,
-          tasa_cambio: abono.tasaCambio ?? null,
+          fecha: sanitizeDate(abono.fecha) || getTodayDateString(),
+          monto_bolivares:
+            abono.montoBolivares !== null && !isNaN(Number(abono.montoBolivares))
+              ? Number(abono.montoBolivares)
+              : null,
+          monto_divisas: Number(abono.montoDivisas) || 0,
+          tasa_cambio:
+            abono.tasaCambio !== null && !isNaN(Number(abono.tasaCambio))
+              ? Number(abono.tasaCambio)
+              : null,
           comentario: abono.comentario || '',
         },
         { onConflict: 'id' }

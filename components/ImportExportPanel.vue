@@ -75,21 +75,33 @@ async function confirmarImportacion() {
     // 2. Si Supabase está conectado, guardar directamente en la base de datos en la nube
     let enNube = false
     if (settingsStore.connected && settingsStore.tablesReady) {
-      // Tomamos todas las cuentas leídas (para asegurar que existen con sus IDs consolidados)
+      // Tomamos todas las cuentas del tipo actual y sus créditos/abonos consolidados
       const cuentasParaUpsert = info.cuentasConsolidadas.filter((c) => c.tipo === props.tipo)
+      const todosLosCreditos: Array<{ cuentaId: string; credito: any }> = []
+      const todosLosAbonos: Array<{ cuentaId: string; abono: any }> = []
+
+      for (const c of cuentasParaUpsert) {
+        for (const cr of c.creditos) {
+          todosLosCreditos.push({ cuentaId: c.id, credito: cr })
+        }
+        for (const ab of c.abonos) {
+          todosLosAbonos.push({ cuentaId: c.id, abono: ab })
+        }
+      }
+
       const resDb = await sync.sincronizarLote({
         cuentas: cuentasParaUpsert,
-        creditos: info.creditosNuevosParaSubir,
-        abonos: info.abonosNuevosParaSubir,
+        creditos: todosLosCreditos,
+        abonos: todosLosAbonos,
       })
 
       if (resDb.ok) {
         enNube = true
       } else {
         toast.add({
-          title: 'Guardado localmente, error en la nube',
+          title: 'Error al sincronizar con la nube',
           description: resDb.mensaje,
-          color: 'yellow',
+          color: 'red',
           icon: 'i-heroicons-exclamation-triangle',
         })
       }
