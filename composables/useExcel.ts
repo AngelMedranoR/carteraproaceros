@@ -217,13 +217,118 @@ export function consolidarImportacion(
   }
 }
 
+function cleanText(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  return String(v).trim()
+}
+
+function cellText(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  return String(v).trim().toLowerCase()
+}
+
+function normHeader(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  return String(v)
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[.°#\-_/]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function esCampoFecha(t: string): boolean {
+  return (
+    t.includes('fecha') ||
+    t.includes('fec') ||
+    t === 'dia' ||
+    t.startsWith('f ') ||
+    t.endsWith(' f') ||
+    t === 'f' ||
+    t.includes('emision')
+  )
+}
+
+function esCampoNumero(t: string): boolean {
+  return (
+    t.includes('numero') ||
+    t.includes('nro') ||
+    t.includes('no') ||
+    t.includes('control') ||
+    t.includes('doc') ||
+    t.startsWith('n ') ||
+    t === 'n' ||
+    t === 'factura' ||
+    t === 'facturas'
+  )
+}
+
+function esEncabezadoAbono(t: string): boolean {
+  return (
+    t.includes('abono') ||
+    t.includes('pago') ||
+    t.includes('cobro') ||
+    t.includes('haber')
+  )
+}
+
+function esEncabezadoFactura(t: string): boolean {
+  return (
+    t.includes('factura') ||
+    t.includes('credito') ||
+    t.includes('debe') ||
+    t.includes('cargo') ||
+    t.includes('emision')
+  )
+}
+
+function esFilaTotal(row: unknown[]): boolean {
+  for (let c = 0; c < Math.min(row.length, 6); c++) {
+    const t = normHeader(row[c])
+    if (!t) continue
+    if (
+      t.startsWith('total') ||
+      t.startsWith('subtotal') ||
+      t.startsWith('saldo') ||
+      t.startsWith('balance') ||
+      t.startsWith('resumen') ||
+      t.startsWith('diferencia') ||
+      t.startsWith('restante') ||
+      t.startsWith('pendiente') ||
+      t === 'totales'
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
 function toNumber(v: unknown): number | null {
   if (v === null || v === undefined) return null
   if (typeof v === 'number') return Number.isFinite(v) ? v : null
   if (typeof v === 'string') {
     const t = v.trim().replace(/ /g, '')
     if (!t) return null
-    const n = Number(t.replace(/,/g, ''))
+    const sinMoneda = t.replace(/[$€bsUSD\s]/gi, '')
+    let n = NaN
+    if (sinMoneda.includes('.') && sinMoneda.includes(',')) {
+      if (sinMoneda.indexOf('.') < sinMoneda.indexOf(',')) {
+        n = Number(sinMoneda.replace(/\./g, '').replace(',', '.'))
+      } else {
+        n = Number(sinMoneda.replace(/,/g, ''))
+      }
+    } else if (sinMoneda.includes(',')) {
+      const partes = sinMoneda.split(',')
+      if (partes[1] && partes[1].length === 2) {
+        n = Number(sinMoneda.replace(',', '.'))
+      } else {
+        n = Number(sinMoneda.replace(/,/g, ''))
+      }
+    } else {
+      n = Number(sinMoneda)
+    }
     return Number.isNaN(n) ? null : n
   }
   return null
@@ -238,11 +343,24 @@ function toIsoDate(v: unknown): string | null {
     const d = String(v.getDate()).padStart(2, '0')
     return `${y}-${m}-${d}`
   }
+  if (typeof v === 'number' && v > 20000 && v < 65000) {
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30))
+    const millis = excelEpoch.getTime() + Math.round(v * 86400 * 1000)
+    const d = new Date(millis)
+    if (!Number.isNaN(d.getTime())) {
+      const y = d.getUTCFullYear()
+      const m = String(d.getUTCMonth() + 1).padStart(2, '0')
+      const day = String(d.getUTCDate()).padStart(2, '0')
+      return `${y}-${m}-${day}`
+    }
+  }
   if (typeof v === 'string') {
     const t = v.trim()
     if (!t || t === ' ') return null
-    const match = t.match(/^(\d{4})-(\d{2})-(\d{2})/)
-    if (match) return `${match[1]}-${match[2]}-${match[3]}`
+    const match = t.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/)
+    if (match) {
+      return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`
+    }
     const dmy = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/)
     if (dmy) {
       const day = dmy[1].padStart(2, '0')
@@ -260,64 +378,357 @@ function toIsoDate(v: unknown): string | null {
   return null
 }
 
-function cellText(v: unknown): string {
-  if (v === null || v === undefined) return ''
-  return String(v).trim().toLowerCase()
+interface MovimientosHoja {
+  creditos: Credito[]
+  abonos: Abono[]
 }
 
-interface Columnas {
-  headerRow: number
-  fecha: number
-  numeroFactura: number
-  montoBolivares: number
-  montoDivisas: number
-  fechaAbono: number
-  montoAbonoBolivares: number
-  montoAbonoDivisas: number
-  comentario: number
-}
+function parseHojaMovimientos(rows: unknown[][]): MovimientosHoja | null {
+  const maxScan = Math.min(rows.length, 25)
+  let headerRow = -1
+  let abonosStartCol = -1
 
-function detectarColumnas(rows: unknown[][]): Columnas | null {
-  const maxScan = Math.min(rows.length, 20)
+  // 1. Detectar si hay fila de secciones (ej. Row 3: "CREDITOS" en col 0..3 y "ABONOS" en col 4..7)
   for (let r = 0; r < maxScan; r++) {
     const row = rows[r] || []
-    let fecha = -1
-    let numeroFactura = -1
-    let montoBolivares = -1
-    let montoDivisas = -1
-    let fechaAbono = -1
-    let montoAbonoBolivares = -1
-    let montoAbonoDivisas = -1
-    let comentario = -1
+    let hasCreditos = false
+    let abonoCol = -1
+    let hasColumnKeywords = false
 
     row.forEach((cell, idx) => {
-      const t = cellText(cell)
-      if (!t) return
-      if (t.includes('fecha de factura')) fecha = idx
-      else if (t.includes('numero de factura') || t.includes('número de factura')) numeroFactura = idx
-      else if (t.includes('monto de factura en bolivares')) montoBolivares = idx
-      else if (t.includes('monto de factura en divisas')) montoDivisas = idx
-      else if (t.includes('fecha de abono')) fechaAbono = idx
-      else if (t.includes('monto de abono en bolivares')) montoAbonoBolivares = idx
-      else if (t.includes('monto de abono en divisas')) montoAbonoDivisas = idx
-      else if (t.includes('comentario')) comentario = idx
+      const t = normHeader(cell)
+      if (esCampoFecha(t) || t.includes('monto') || esCampoNumero(t) || t === 'bs' || t === 'usd') {
+        hasColumnKeywords = true
+      }
+      if (t === 'credito' || t === 'creditos' || t === 'facturas' || t === 'factura' || t === 'cuentas por cobrar' || t === 'cuentas por pagar') {
+        hasCreditos = true
+      }
+      if (t === 'abono' || t === 'abonos' || t === 'pagos' || t === 'pago' || t === 'cobros' || t === 'cobro') {
+        if (abonoCol === -1 || idx < abonoCol) abonoCol = idx
+      }
     })
 
-    if (fecha >= 0 && montoDivisas >= 0) {
-      return {
-        headerRow: r,
-        fecha,
-        numeroFactura,
-        montoBolivares,
-        montoDivisas,
-        fechaAbono,
-        montoAbonoBolivares,
-        montoAbonoDivisas,
-        comentario,
-      }
+    if (!hasColumnKeywords && hasCreditos && abonoCol > 0) {
+      abonosStartCol = abonoCol
+      headerRow = r + 1
+      break
     }
   }
-  return null
+
+  // 2. Escanear filas para mapear columnas
+  let mapping = {
+    fechaCr: -1,
+    numeroFactura: -1,
+    montoCrBolivares: -1,
+    montoCrDivisas: -1,
+    fechaAb: -1,
+    montoAbBolivares: -1,
+    montoAbDivisas: -1,
+    comentarioAb: -1,
+    tipo: -1,
+  }
+
+  const startScan = headerRow >= 0 ? headerRow : 0
+  const scanLimit = headerRow >= 0 ? Math.min(rows.length, headerRow + 2) : maxScan
+
+  for (let r = startScan; r < scanLimit; r++) {
+    const row = rows[r] || []
+    let fCr = -1
+    let nFact = -1
+    let mCrBs = -1
+    let mCrDiv = -1
+    let fAb = -1
+    let mAbBs = -1
+    let mAbDiv = -1
+    let comAb = -1
+    let tipoCol = -1
+
+    row.forEach((cell, idx) => {
+      const t = normHeader(cell)
+      if (!t) return
+
+      const isAbonoSection = abonosStartCol > 0 && idx >= abonosStartCol
+
+      // Tipo de transacción
+      if (t === 'tipo' || t === 'tipo movimiento' || t === 'tipo transaccion' || t === 'tipo de movimiento') {
+        tipoCol = idx
+        return
+      }
+
+      // Encabezados explícitos de ABONOS
+      if (esEncabezadoAbono(t) || isAbonoSection) {
+        if (esCampoFecha(t)) {
+          fAb = idx
+        } else if (t.includes('bolivar') || t.includes('bs')) {
+          mAbBs = idx
+        } else if (
+          t.includes('divisa') ||
+          t.includes('usd') ||
+          t.includes('$') ||
+          t.includes('monto') ||
+          t === 'abono' ||
+          t === 'abonos' ||
+          t === 'pago' ||
+          t === 'pagos' ||
+          t === 'cobro' ||
+          t === 'cobros' ||
+          t === 'haber'
+        ) {
+          mAbDiv = idx
+        } else if (
+          t.includes('coment') ||
+          t.includes('obser') ||
+          t.includes('detall') ||
+          t.includes('descrip') ||
+          t.includes('concep') ||
+          t.includes('banco') ||
+          t.includes('ref')
+        ) {
+          comAb = idx
+        }
+        return
+      }
+
+      // Encabezados explícitos de FACTURAS / CRÉDITOS
+      if (esEncabezadoFactura(t)) {
+        if (esCampoFecha(t)) {
+          fCr = idx
+        } else if (esCampoNumero(t)) {
+          nFact = idx
+        } else if (t.includes('bolivar') || t.includes('bs')) {
+          mCrBs = idx
+        } else if (
+          t.includes('divisa') ||
+          t.includes('usd') ||
+          t.includes('$') ||
+          t.includes('monto') ||
+          t.includes('importe') ||
+          t.includes('debe')
+        ) {
+          mCrDiv = idx
+        }
+        return
+      }
+
+      // Encabezados genéricos
+      if (esCampoFecha(t)) {
+        if (fCr === -1) fCr = idx
+        else if (fAb === -1) fAb = idx
+      } else if (esCampoNumero(t)) {
+        if (nFact === -1) nFact = idx
+      } else if (t.includes('bolivar') || t === 'bs') {
+        if (mCrBs === -1) mCrBs = idx
+        else if (mAbBs === -1) mAbBs = idx
+      } else if (
+        t.includes('divisa') ||
+        t.includes('usd') ||
+        t.includes('$') ||
+        t.includes('monto') ||
+        t.includes('importe')
+      ) {
+        if (mCrDiv === -1) mCrDiv = idx
+        else if (mAbDiv === -1) mAbDiv = idx
+      } else if (
+        t.includes('coment') ||
+        t.includes('obser') ||
+        t.includes('detall') ||
+        t.includes('descrip') ||
+        t.includes('concep') ||
+        t.includes('ref')
+      ) {
+        comAb = idx
+      }
+    })
+
+    if ((fCr >= 0 || fAb >= 0) && (mCrDiv >= 0 || mAbDiv >= 0)) {
+      headerRow = r
+      mapping = {
+        fechaCr: fCr,
+        numeroFactura: nFact,
+        montoCrBolivares: mCrBs,
+        montoCrDivisas: mCrDiv,
+        fechaAb: fAb,
+        montoAbBolivares: mAbBs,
+        montoAbDivisas: mAbDiv,
+        comentarioAb: comAb,
+        tipo: tipoCol,
+      }
+      break
+    }
+  }
+
+  if (headerRow === -1) {
+    return null
+  }
+
+  const creditos: Credito[] = []
+  const abonos: Abono[] = []
+
+  let modoVerticalAbonos = false
+  let mappingAbonosVertical: {
+    fechaAb: number
+    montoAbDivisas: number
+    montoAbBolivares: number
+    comentarioAb: number
+  } | null = null
+
+  for (let r = headerRow + 1; r < rows.length; r++) {
+    const row = rows[r] || []
+    if (row.length === 0 || row.every((c) => c === null || c === undefined || c === '')) {
+      continue
+    }
+
+    // Verificar si es un separador de sección vertical hacia ABONOS
+    if (!modoVerticalAbonos && mapping.montoAbDivisas === -1) {
+      let tieneTituloAbonos = false
+      row.forEach((cell) => {
+        const t = normHeader(cell)
+        if (t === 'abonos' || t === 'pagos' || t === 'cobros' || t === 'relacion de abonos' || t === 'relacion de pagos') {
+          tieneTituloAbonos = true
+        }
+      })
+      if (tieneTituloAbonos) {
+        modoVerticalAbonos = true
+        continue
+      }
+    }
+
+    // Si entramos en modo vertical de abonos, buscar encabezado de abonos si aún no lo tenemos
+    if (modoVerticalAbonos && !mappingAbonosVertical) {
+      let vfAb = -1
+      let vmAbDiv = -1
+      let vmAbBs = -1
+      let vcomAb = -1
+      row.forEach((cell, idx) => {
+        const t = normHeader(cell)
+        if (esCampoFecha(t)) vfAb = idx
+        else if (t.includes('bolivar') || t.includes('bs')) vmAbBs = idx
+        else if (t.includes('divisa') || t.includes('usd') || t.includes('$') || t.includes('monto') || t.includes('abono') || t.includes('pago')) vmAbDiv = idx
+        else if (t.includes('coment') || t.includes('obser') || t.includes('detall') || t.includes('descrip') || t.includes('ref')) vcomAb = idx
+      })
+      if (vfAb >= 0 || vmAbDiv >= 0) {
+        mappingAbonosVertical = {
+          fechaAb: vfAb >= 0 ? vfAb : mapping.fechaCr,
+          montoAbDivisas: vmAbDiv >= 0 ? vmAbDiv : mapping.montoCrDivisas,
+          montoAbBolivares: vmAbBs >= 0 ? vmAbBs : mapping.montoCrBolivares,
+          comentarioAb: vcomAb >= 0 ? vcomAb : (mapping.numeroFactura >= 0 ? mapping.numeroFactura : -1),
+        }
+        continue
+      }
+    }
+
+    // Ignorar filas de totales / subtotales / saldos
+    if (esFilaTotal(row)) {
+      continue
+    }
+
+    // Si estamos en la sección vertical de abonos
+    if (modoVerticalAbonos) {
+      const vMap = mappingAbonosVertical || {
+        fechaAb: mapping.fechaCr,
+        montoAbDivisas: mapping.montoCrDivisas,
+        montoAbBolivares: mapping.montoCrBolivares,
+        comentarioAb: mapping.numeroFactura,
+      }
+      const fecha = vMap.fechaAb >= 0 ? toIsoDate(row[vMap.fechaAb]) : null
+      const montoDiv = vMap.montoAbDivisas >= 0 ? toNumber(row[vMap.montoAbDivisas]) : null
+      const montoBs = vMap.montoAbBolivares >= 0 ? toNumber(row[vMap.montoAbBolivares]) : null
+      const comentario = vMap.comentarioAb >= 0 ? cleanText(row[vMap.comentarioAb]) : ''
+
+      if (montoDiv !== null && montoDiv !== 0) {
+        abonos.push({
+          id: newId('ab'),
+          fecha: fecha || '',
+          montoBolivares: montoBs,
+          montoDivisas: Math.abs(montoDiv),
+          comentario,
+        })
+      }
+      continue
+    }
+
+    // Modo normal: Side-by-side, Ledger, o Fila con Tipo/Monto firmado
+    const fechaCr = mapping.fechaCr >= 0 ? toIsoDate(row[mapping.fechaCr]) : null
+    const numFact = mapping.numeroFactura >= 0 ? cleanText(row[mapping.numeroFactura]) : ''
+    const montoCrBs = mapping.montoCrBolivares >= 0 ? toNumber(row[mapping.montoCrBolivares]) : null
+    const montoCrDiv = mapping.montoCrDivisas >= 0 ? toNumber(row[mapping.montoCrDivisas]) : null
+
+    const fechaAb = mapping.fechaAb >= 0 ? toIsoDate(row[mapping.fechaAb]) : (fechaCr || null)
+    const montoAbBs = mapping.montoAbBolivares >= 0 ? toNumber(row[mapping.montoAbBolivares]) : null
+    const montoAbDiv = mapping.montoAbDivisas >= 0 ? toNumber(row[mapping.montoAbDivisas]) : null
+    const comAb = mapping.comentarioAb >= 0 ? cleanText(row[mapping.comentarioAb]) : ''
+
+    // Caso A: Columna "Tipo" explícita
+    if (mapping.tipo >= 0) {
+      const tipoVal = normHeader(row[mapping.tipo])
+      const esAbono = esEncabezadoAbono(tipoVal)
+      const monto = montoCrDiv !== null ? montoCrDiv : montoAbDiv
+      if (monto !== null && monto !== 0) {
+        if (esAbono) {
+          abonos.push({
+            id: newId('ab'),
+            fecha: fechaAb || fechaCr || '',
+            montoBolivares: montoAbBs || montoCrBs,
+            montoDivisas: Math.abs(monto),
+            comentario: comAb || numFact,
+          })
+        } else {
+          creditos.push({
+            id: newId('cr'),
+            fecha: fechaCr || '',
+            numeroFactura: numFact,
+            montoBolivares: montoCrBs,
+            montoDivisas: Math.abs(monto),
+          })
+        }
+      }
+      continue
+    }
+
+    // Caso B: Columna única de monto con signo negativo para abonos
+    if (mapping.montoAbDivisas === -1 && montoCrDiv !== null && montoCrDiv < 0) {
+      abonos.push({
+        id: newId('ab'),
+        fecha: fechaCr || '',
+        montoBolivares: montoCrBs !== null ? Math.abs(montoCrBs) : null,
+        montoDivisas: Math.abs(montoCrDiv),
+        comentario: comAb || numFact,
+      })
+      continue
+    }
+
+    // Caso C: Crédito (debe tener un monto positivo válido o factura con monto != 0)
+    if (montoCrDiv !== null && montoCrDiv > 0) {
+      creditos.push({
+        id: newId('cr'),
+        fecha: fechaCr || '',
+        numeroFactura: numFact,
+        montoBolivares: montoCrBs,
+        montoDivisas: montoCrDiv,
+      })
+    } else if (numFact && montoCrDiv !== null && montoCrDiv !== 0) {
+      creditos.push({
+        id: newId('cr'),
+        fecha: fechaCr || '',
+        numeroFactura: numFact,
+        montoBolivares: montoCrBs,
+        montoDivisas: montoCrDiv,
+      })
+    }
+
+    // Caso D: Abono (debe tener un monto positivo válido)
+    if (montoAbDiv !== null && montoAbDiv > 0) {
+      abonos.push({
+        id: newId('ab'),
+        fecha: fechaAb || '',
+        montoBolivares: montoAbBs,
+        montoDivisas: montoAbDiv,
+        comentario: comAb,
+      })
+    }
+  }
+
+  return { creditos, abonos }
 }
 
 function esHojaResumen(nombre: string) {
@@ -355,53 +766,13 @@ export function useExcel() {
 
       const ws = workbook.Sheets[nombreHoja]
       const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true })
-      const columnas = detectarColumnas(rows)
-      if (!columnas) {
+      const movimientos = parseHojaMovimientos(rows)
+      if (!movimientos) {
         hojasOmitidas.push(`${nombreHoja} (formato no reconocido)`)
         return
       }
 
-      const creditos: Credito[] = []
-      const abonos: Abono[] = []
-
-      for (let r = columnas.headerRow + 1; r < rows.length; r++) {
-        const row = rows[r] || []
-
-        const fecha = toIsoDate(row[columnas.fecha])
-        const numeroFactura = columnas.numeroFactura >= 0 ? row[columnas.numeroFactura] : null
-        const montoBolivares = columnas.montoBolivares >= 0 ? toNumber(row[columnas.montoBolivares]) : null
-        const montoDivisas = toNumber(row[columnas.montoDivisas])
-
-        if (fecha || numeroFactura || montoDivisas !== null) {
-          if (fecha || montoDivisas !== null) {
-            creditos.push({
-              id: newId('cr'),
-              fecha: fecha || '',
-              numeroFactura: numeroFactura !== null && numeroFactura !== undefined ? String(numeroFactura) : '',
-              montoBolivares,
-              montoDivisas: montoDivisas || 0,
-            })
-          }
-        }
-
-        const fechaAbono = columnas.fechaAbono >= 0 ? toIsoDate(row[columnas.fechaAbono]) : null
-        const montoAbonoBolivares =
-          columnas.montoAbonoBolivares >= 0 ? toNumber(row[columnas.montoAbonoBolivares]) : null
-        const montoAbonoDivisas = columnas.montoAbonoDivisas >= 0 ? toNumber(row[columnas.montoAbonoDivisas]) : null
-        const comentario = columnas.comentario >= 0 ? row[columnas.comentario] : null
-
-        if (fechaAbono || montoAbonoDivisas !== null || comentario) {
-          if (montoAbonoDivisas !== null && montoAbonoDivisas !== 0) {
-            abonos.push({
-              id: newId('ab'),
-              fecha: fechaAbono || '',
-              montoBolivares: montoAbonoBolivares,
-              montoDivisas: montoAbonoDivisas || 0,
-              comentario: comentario ? String(comentario).trim() : '',
-            })
-          }
-        }
-      }
+      const { creditos, abonos } = movimientos
 
       if (creditos.length === 0 && abonos.length === 0) {
         hojasOmitidas.push(`${nombreHoja} (sin movimientos)`)

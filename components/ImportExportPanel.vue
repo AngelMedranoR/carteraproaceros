@@ -110,7 +110,7 @@ async function confirmarImportacion() {
     const { estadisticas } = info
     toast.add({
       title: enNube ? 'Sincronizado con la base de datos' : `${estadisticas.cuentasTotal} ${etiqueta} importados`,
-      description: `${estadisticas.cuentasTotal} ${etiqueta} procesados (${estadisticas.creditosNuevos} facturas agregadas, ${estadisticas.creditosExistentesOmitidos} ya existentes omitidas).${enNube ? ' Disponible en tiempo real en tu PC y teléfono.' : ''}`,
+      description: `${estadisticas.cuentasTotal} ${etiqueta} procesados (${estadisticas.creditosNuevos} facturas y ${estadisticas.abonosNuevos} abonos agregados, ${estadisticas.creditosExistentesOmitidos + estadisticas.abonosExistentesOmitidos} omitidos por ya existir).${enNube ? ' Disponible en tiempo real en tu PC y teléfono.' : ''}`,
       icon: enNube ? 'i-heroicons-cloud-arrow-up' : 'i-heroicons-check-circle',
       color: 'green',
     })
